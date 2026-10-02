@@ -7,6 +7,7 @@ import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawLoadingState
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
+import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.sessionColor
@@ -20,9 +21,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.Checkbox
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -118,6 +121,10 @@ internal fun SessionsScreen(
   var renameGroupName by rememberSaveable { mutableStateOf<String?>(null) }
   var deleteGroupName by rememberSaveable { mutableStateOf<String?>(null) }
   var newGroupDialogVisible by rememberSaveable { mutableStateOf(false) }
+  var isMultiSelectMode by rememberSaveable { mutableStateOf(false) }
+  var selectedSessionKeys by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
+  var isBulkDeleting by remember { mutableStateOf(false) }
+  var bulkDeleteDialogVisible by remember { mutableStateOf(false) }
   val searchState =
     rememberSessionBrowserSearchState(
       viewModel = viewModel,
@@ -189,15 +196,57 @@ internal fun SessionsScreen(
               modifier = Modifier.testTag("sidebar-open-sessions"),
             )
           }
-          Text(text = nativeString("Threads"), style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
+          Text(
+            text = if (isMultiSelectMode) "選択中: ${selectedSessionKeys.size}件" else nativeString("Threads"),
+            style = ClawTheme.type.display.copy(fontSize = if (isMultiSelectMode) 20.sp else 24.sp, lineHeight = 26.sp),
+            color = if (isMultiSelectMode) ClawTheme.colors.primary else ClawTheme.colors.text,
+            modifier = Modifier.weight(1f)
+          )
           ClawPlainIconButton(
-            icon = Icons.Default.Search,
-            contentDescription = nativeString("Focus thread search"),
+            icon = if (isMultiSelectMode) Icons.Default.Check else Icons.Default.PlayArrow,
+            contentDescription = if (isMultiSelectMode) "選択完了" else "複数選択",
             onClick = {
-              searchFocusRequester.requestFocus()
-              keyboardController?.show()
+              isMultiSelectMode = !isMultiSelectMode
+              if (!isMultiSelectMode) {
+                selectedSessionKeys = emptySet()
+              }
             },
           )
+          if (!isMultiSelectMode) {
+            ClawPlainIconButton(
+              icon = Icons.Default.Search,
+              contentDescription = nativeString("Focus thread search"),
+              onClick = {
+                searchFocusRequester.requestFocus()
+                keyboardController?.show()
+              },
+            )
+          }
+        }
+      }
+
+      if (isMultiSelectMode) {
+        item {
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            ClawSecondaryButton(
+              text = "全選択",
+              onClick = { selectedSessionKeys = visibleSessions.map { it.key }.toSet() }
+            )
+            ClawSecondaryButton(
+              text = "解除",
+              onClick = { selectedSessionKeys = emptySet() }
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            ClawPrimaryButton(
+              text = if (isBulkDeleting) "削除中..." else "🗑️ 一括削除 (${selectedSessionKeys.size})",
+              onClick = { if (selectedSessionKeys.isNotEmpty()) bulkDeleteDialogVisible = true },
+              enabled = selectedSessionKeys.isNotEmpty() && !isBulkDeleting
+            )
+          }
         }
       }
 
@@ -355,6 +404,16 @@ internal fun SessionsScreen(
               treeEntry.descendantState.presentationLabel().takeIf { descendantsCollapsed }
             SessionRow(
               session = session,
+              isSelectable = isMultiSelectMode,
+              isSelected = session.key in selectedSessionKeys,
+              onToggleSelect = {
+                selectedSessionKeys =
+                  if (session.key in selectedSessionKeys) {
+                    selectedSessionKeys - session.key
+                  } else {
+                    selectedSessionKeys + session.key
+                  }
+              },
               title = sessionPresentationTitle(session) { nativeString("Main thread") },
               subtitle =
                 collapsedDescendantLabel
@@ -467,6 +526,7 @@ internal fun SessionsScreen(
             label = label.takeIf(String::isNotEmpty),
             clearLabel = label.isEmpty(),
           )
+          viewModel.refreshChatSessions()
         }
       },
     )
@@ -573,6 +633,42 @@ internal fun SessionsScreen(
       },
     )
   }
+
+  if (bulkDeleteDialogVisible) {
+    AlertDialog(
+      onDismissRequest = { bulkDeleteDialogVisible = false },
+      containerColor = ClawTheme.colors.surfaceRaised,
+      title = { Text("スレッド一括削除", style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+      text = { Text("選択された ${selectedSessionKeys.size} 件のスレッドを完全に削除しますか？\nこの操作は取り消せません。", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
+      confirmButton = {
+        TextButton(
+          onClick = {
+            bulkDeleteDialogVisible = false
+            isBulkDeleting = true
+            coroutineScope.launch {
+              try {
+                val targets = visibleSessions
+                  .filter { it.key in selectedSessionKeys }
+                  .map { it.key to it.ownerAgentId }
+                viewModel.deleteChatSessions(targets)
+                selectedSessionKeys = emptySet()
+                isMultiSelectMode = false
+              } finally {
+                isBulkDeleting = false
+              }
+            }
+          },
+        ) {
+          Text("削除", color = ClawTheme.colors.danger)
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = { bulkDeleteDialogVisible = false }) {
+          Text(nativeString("Cancel"))
+        }
+      },
+    )
+  }
 }
 
 @Composable
@@ -612,6 +708,9 @@ private fun FilterPill(
 @Composable
 private fun SessionRow(
   session: ChatSessionEntry,
+  isSelectable: Boolean = false,
+  isSelected: Boolean = false,
+  onToggleSelect: () -> Unit = {},
   title: String,
   subtitle: String,
   metadata: String,
@@ -649,10 +748,12 @@ private fun SessionRow(
             Modifier
               .fillMaxWidth()
               .combinedClickable(
-                onClick = onClick,
+                onClick = if (isSelectable) onToggleSelect else onClick,
                 onLongClick = {
-                  submenu = null
-                  menuExpanded = true
+                  if (!isSelectable) {
+                    submenu = null
+                    menuExpanded = true
+                  }
                 },
               ).heightIn(min = 58.dp)
               .padding(start = (depth.coerceAtMost(3) * 18).dp)
@@ -661,6 +762,13 @@ private fun SessionRow(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(7.dp),
         ) {
+          if (isSelectable) {
+            Checkbox(
+              checked = isSelected,
+              onCheckedChange = { onToggleSelect() },
+              modifier = Modifier.size(36.dp),
+            )
+          }
           Box(modifier = Modifier.size(ClawTheme.spacing.touchTarget), contentAlignment = Alignment.Center) {
             if (hasChildren) {
               IconButton(onClick = onToggleExpanded) {

@@ -536,9 +536,9 @@ internal fun chatComposerSendEnabled(
 ): Boolean =
   !talkActive &&
     !shareStaging &&
-    !sendInFlight &&
     !dictationActive &&
     !modelUnavailable &&
     voiceNoteState !is VoiceNoteRecorderState.Recording &&
     voiceNoteState !is VoiceNoteRecorderState.Preparing &&
     hasContent
+

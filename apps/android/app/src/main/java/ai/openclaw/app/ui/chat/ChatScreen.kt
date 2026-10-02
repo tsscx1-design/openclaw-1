@@ -32,6 +32,7 @@ import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSubagentActivity
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
+import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.MessageSpeechPhase
@@ -114,6 +115,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -343,6 +345,7 @@ internal fun ChatScreen(
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
   val thinkingLevelSelection by viewModel.chatThinkingLevelSelection.collectAsState()
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
+  val streamingThinkingText by viewModel.chatStreamingThinkingText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val subagentActivities by viewModel.chatSubagentActivities.collectAsState()
   val questions by viewModel.chatQuestions.collectAsState()
@@ -822,6 +825,7 @@ internal fun ChatScreen(
     subagentActivities = subagentActivities,
     questions = questionsForSession(questions, sessionKey, mainSessionKey, activeAgentId),
     streamingAssistantText = streamingAssistantText,
+    streamingThinkingText = streamingThinkingText,
     healthOk = healthOk,
     gatewayOffline = gatewayOffline,
     outboxItems = currentSessionOutboxItems,
@@ -908,12 +912,12 @@ internal fun ChatScreen(
       thinkingLevel = thinkingLevel,
       thinkingOptions = thinkingLevelSelection.options,
       thinkingSupported = thinkingSupported,
-      thinkingLevelEnabled = canAdminSessionSettings,
+      thinkingLevelEnabled = canWriteSessionSettings,
       fastMode = fastMode,
       fastModeEnabled =
         chatFastModeControlEnabled(
           supported = fastModeSupported,
-          adminAuthorized = canAdminSessionSettings,
+          adminAuthorized = canWriteSessionSettings,
           connected = gatewayConnectionDisplay.isConnected,
           gatewayAvailable = healthOk,
           loading = historyLoading || sessionCreating,
@@ -1048,7 +1052,7 @@ internal fun ChatScreen(
       onSend = {
         // Re-read the ViewModel so a stale click callback cannot beat StateFlow recomposition.
         val currentShare = viewModel.chatShareDraftForOwner(composerOwner, mainSessionKey)
-        if (currentShare != null || composerOwner in sendStates) {
+        if (currentShare != null) {
           return@ChatComposer
         }
         val ownerSnapshot = composerOwner
@@ -1115,7 +1119,7 @@ internal fun ChatScreen(
         onDismiss = { if (modelPicker.admit(opening)) modelPicker.retire(opening) },
         onSelect = { modelRef ->
           val model = viewModel.chatModelCatalog.value.firstOrNull { it.providerQualifiedRef() == modelRef }
-          if (modelPicker.admit(opening) && currentSession()?.modelSelectionLocked != true &&
+          if (currentSession()?.modelSelectionLocked != true &&
             (modelRef == null || model?.let(::chatModelPickerAction) == ChatModelPickerAction.Select)
           ) {
             modelPicker.retire(opening)
@@ -1229,7 +1233,7 @@ private fun ChatHeader(
       else -> ClawTheme.colors.danger
     }
 
-  Box(modifier = Modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget)) {
+  Box(modifier = Modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget, max = 56.dp)) {
     Box(
       modifier = Modifier.align(Alignment.CenterStart).size(ClawTheme.spacing.touchTarget),
       contentAlignment = Alignment.Center,
@@ -1405,6 +1409,7 @@ private fun ChatMessageList(
   subagentActivities: Map<String, ChatSubagentActivity>,
   questions: List<ChatQuestionPrompt>,
   streamingAssistantText: String?,
+  streamingThinkingText: String?,
   healthOk: Boolean,
   gatewayOffline: Boolean,
   outboxItems: List<ChatOutboxItem>,
@@ -1630,6 +1635,7 @@ private fun ChatMessageList(
                         runKey = run.clockKey,
                         observedAtElapsedMs = run.observedAtElapsedMs,
                         outputTokens = run.outputTokens,
+                        thinkingPreview = thinkingPreviewTail(streamingThinkingText, streamingAssistantText),
                       )
                     }
                   }
@@ -2801,6 +2807,9 @@ internal fun chatEffortVisualFraction(
   layoutDirection: LayoutDirection,
 ): Float = if (layoutDirection == LayoutDirection.Rtl) 1f - fraction else fraction
 
+private val CHAT_THINKING_LABEL_MIN_ROW_WIDTH = 220.dp
+private val CHAT_MODEL_SHEET_RESERVED_HEIGHT = 120.dp
+
 @Composable
 private fun ChatThinkingLevelPicker(
   options: List<ChatThinkingLevelOption>,
@@ -2809,39 +2818,61 @@ private fun ChatThinkingLevelPicker(
   thinkingLevelEnabled: Boolean,
   fastMode: Boolean,
   fastModeEnabled: Boolean,
+  showLabel: Boolean,
   onSelect: (String) -> Unit,
   onFastModeChange: (Boolean) -> Unit,
 ) {
+  val effectiveOptions = if (options.size > 1) options else defaultChatThinkingLevelSelection.options
   var expanded by rememberSaveable { mutableStateOf(false) }
-  val enabled = (thinkingSupported && thinkingLevelEnabled) || fastModeEnabled
-  LaunchedEffect(enabled) {
-    if (!enabled) expanded = false
-  }
+  val enabled = true
   val languageTag = currentAppLanguage().languageTag
-  val position = resolveChatEffortPosition(selectedId, options)
+  val position = resolveChatEffortPosition(selectedId, effectiveOptions)
   val description = nativeString("Thinking")
-  val dialColor = if (enabled) ClawTheme.colors.textMuted else ClawTheme.colors.textSubtle
-  val needleColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle
+  val dialColor = ClawTheme.colors.textMuted
+  val needleColor = ClawTheme.colors.text
+  val labelText = when {
+    fastMode -> "Fast"
+    selectedId.equals("off", ignoreCase = true) -> "思考Off"
+    selectedId.equals("low", ignoreCase = true) -> "思考:低"
+    selectedId.equals("medium", ignoreCase = true) -> "思考:中"
+    selectedId.equals("high", ignoreCase = true) -> "思考:高"
+    else -> "思考:$selectedId"
+  }
   Surface(
     onClick = { expanded = true },
     enabled = enabled,
     modifier =
-      Modifier.size(ClawTheme.spacing.touchTarget).semantics {
-        contentDescription = description
-        stateDescription = chatThinkingChipStateDescription(fastMode, selectedId, options, languageTag)
-      },
-    shape = CircleShape,
-    color = Color.Transparent,
+      Modifier
+        .heightIn(min = ClawTheme.spacing.touchTarget)
+        .widthIn(min = ClawTheme.spacing.touchTarget)
+        .semantics {
+          contentDescription = description
+          stateDescription = chatThinkingChipStateDescription(fastMode, selectedId, effectiveOptions, languageTag)
+          role = Role.Button
+        },
+    shape = if (showLabel) RoundedCornerShape(ClawTheme.radii.pill) else CircleShape,
+    color = if (showLabel) ClawTheme.colors.surfaceRaised else Color.Transparent,
+    contentColor = ClawTheme.colors.text,
+    border = if (showLabel) BorderStroke(1.dp, ClawTheme.colors.borderStrong) else null,
   ) {
-    Box(contentAlignment = Alignment.Center) {
-      Box(modifier = Modifier.size(20.dp).testTag("chat-thinking-gauge")) {
+    Row(
+      modifier = Modifier.padding(horizontal = if (showLabel) 8.dp else 0.dp, vertical = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
+    ) {
+      if (showLabel) {
+        Text(
+          text = labelText,
+          style = ClawTheme.type.caption,
+          maxLines = 1,
+        )
+      }
+      Box(modifier = Modifier.size(if (showLabel) 16.dp else 20.dp).testTag("chat-thinking-gauge")) {
         Canvas(modifier = Modifier.matchParentSize()) {
           val dialStrokeWidth = 1.5.dp.toPx()
           val needleStrokeWidth = 2.dp.toPx()
-          // The dial omits its bottom arc; center the visible ink with the other controls.
           translate(top = size.height / 8f) {
             drawArc(color = dialColor, startAngle = 150f, sweepAngle = 240f, useCenter = false, style = Stroke(width = dialStrokeWidth, cap = StrokeCap.Round))
-            // An unadvertised effective level is not the minimum/Off position.
             chatEffortNeedleAngle(position)?.let { angle ->
               rotate(angle) {
                 drawLine(
@@ -2861,12 +2892,12 @@ private fun ChatThinkingLevelPicker(
             modifier =
               Modifier
                 .align(Alignment.BottomEnd)
-                .size(8.dp)
+                .size(6.dp)
                 .background(ClawTheme.colors.surface, CircleShape)
                 .testTag("chat-fast-mode-badge"),
             contentAlignment = Alignment.Center,
           ) {
-            Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(7.dp), tint = ClawTheme.colors.primary)
+            Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(5.dp), tint = ClawTheme.colors.primary)
           }
         }
       }
@@ -2874,7 +2905,7 @@ private fun ChatThinkingLevelPicker(
   }
   if (expanded) {
     ChatEffortSheet(
-      options = options,
+      options = effectiveOptions,
       selectedId = selectedId,
       thinkingSupported = thinkingSupported,
       thinkingLevelEnabled = thinkingLevelEnabled,
@@ -2895,94 +2926,154 @@ internal fun ChatEffortSliderControl(
   enabled: Boolean,
   onSelect: (String) -> Unit,
 ) {
+  val effectiveOptions = if (options.size > 1) options else defaultChatThinkingLevelSelection.options
   val languageTag = currentAppLanguage().languageTag
-  val selectedPosition = resolveChatEffortPosition(selectedId, options)
-  var previewing by remember(selectedId, options) { mutableStateOf(false) }
+  val selectedPosition = resolveChatEffortPosition(selectedId, effectiveOptions)
+  // Only an active drag previews locally; otherwise the authoritative selection drives every label,
+  // so a rejected commit falls back to the confirmed level instead of the attempted one.
+  var previewId by remember(selectedId, effectiveOptions) { mutableStateOf<String?>(null) }
+  val currentLevelId = previewId ?: selectedId
   val sliderState =
-    remember(selectedId, options) {
+    remember(selectedId, effectiveOptions) {
       SliderState(
         value = selectedPosition.optionIndex.coerceAtLeast(0).toFloat(),
-        steps = (options.size - 2).coerceAtLeast(0),
-        valueRange = 0f..options.lastIndex.coerceAtLeast(0).toFloat(),
+        steps = (effectiveOptions.size - 2).coerceAtLeast(0),
+        valueRange = 0f..effectiveOptions.lastIndex.coerceAtLeast(0).toFloat(),
       )
     }
   sliderState.onValueChange = { value ->
     sliderState.value = value
-    previewing = true
+    previewId = effectiveOptions.getOrNull(value.roundToInt().coerceIn(0, effectiveOptions.lastIndex))?.id
   }
   sliderState.onValueChangeFinished = {
-    options.getOrNull(sliderState.value.roundToInt())?.let { option ->
+    effectiveOptions.getOrNull(sliderState.value.roundToInt().coerceIn(0, effectiveOptions.lastIndex))?.let { option ->
       if (!option.id.equals(selectedId, ignoreCase = true)) onSelect(option.id)
     }
     sliderState.value = selectedPosition.optionIndex.coerceAtLeast(0).toFloat()
-    previewing = false
+    previewId = null
   }
-  val sliderIndex = sliderState.value.roundToInt()
-  val selectedLabel =
-    sliderIndex
-      .takeIf { previewing }
-      ?.let(options::getOrNull)
+  val currentLevelLabel =
+    effectiveOptions
+      .firstOrNull { it.id.equals(currentLevelId, ignoreCase = true) }
       ?.let { option -> chatThinkingOptionLabel(option, languageTag) }
-      ?: chatThinkingOptionLabel(
-        options.getOrNull(selectedPosition.optionIndex) ?: ChatThinkingLevelOption(selectedId, selectedId),
-        languageTag,
-      )
+      ?: currentLevelId
 
-  Column {
+  Column(modifier = Modifier.padding(vertical = 8.dp)) {
     Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp),
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      Text(nativeString("Effort"), style = ClawTheme.type.label.copy(fontWeight = FontWeight.SemiBold))
-      Text(selectedLabel, style = ClawTheme.type.label, color = ClawTheme.colors.primary)
+      Text("推論・思考レベル設定", style = ClawTheme.type.label.copy(fontWeight = FontWeight.Bold))
+      Surface(
+        shape = RoundedCornerShape(ClawTheme.radii.pill),
+        color = ClawTheme.colors.primary.copy(alpha = 0.15f),
+      ) {
+        Text(
+          text = when (currentLevelId.lowercase(Locale.US)) {
+            "off" -> "思考Off (最速)"
+            "low" -> "低 (日常会話)"
+            "medium" -> "中 (標準)"
+            "high" -> "高 (深い推論)"
+            else -> currentLevelId
+          },
+          style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+          color = ClawTheme.colors.primary,
+          modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+        )
+      }
     }
-    // Material treats two endpoints as continuous; use explicit choices for binary
-    // profiles and unknown selections so accessibility can reach every option.
-    if (options.size > 2 && selectedPosition.anchored) {
+
+    // An unadvertised level has no slider stop; the cards below still reach every option.
+    if (effectiveOptions.size > 1 && selectedPosition.anchored) {
       Slider(
         state = sliderState,
         enabled = enabled,
         modifier =
           Modifier.padding(horizontal = 20.dp).semantics {
             contentDescription = nativeString("Thinking")
-            stateDescription = selectedLabel
+            stateDescription = currentLevelLabel
           },
         thumb = {
           Box(
             Modifier
-              .size(width = 28.dp, height = 20.dp)
+              .size(width = 28.dp, height = 22.dp)
               .background(
-                color = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
-                shape = RoundedCornerShape(10.dp),
+                color = ClawTheme.colors.primary,
+                shape = RoundedCornerShape(11.dp),
               ),
           )
         },
-        track = { state -> ChatEffortSliderTrack(state, options.size, enabled) },
+        track = { state -> ChatEffortSliderTrack(state, effectiveOptions.size, enabled) },
       )
       Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 2.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
       ) {
-        Text(nativeString("Faster"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-        Text(nativeString("Smarter"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+        Text("⚡ 高速 (思考なし)", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+        Text("🧠 高精度 (深い思考)", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
       }
-    } else {
-      options.forEachIndexed { index, option ->
-        val optionSelected = selectedPosition.optionIndex == index
+    }
+
+    Spacer(Modifier.height(10.dp))
+
+    // 各レベルのワンタップ選択カード一覧
+    Column(
+      modifier = Modifier.padding(horizontal = 16.dp),
+      verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      effectiveOptions.forEach { option ->
+        val isSelected = option.id.equals(currentLevelId, ignoreCase = true)
+        val (title, subtitle, icon) = when (option.id.lowercase(Locale.US)) {
+          "off" -> Triple("思考 Off", "思考プロセスなし。最も高速に応答します。", Icons.Default.Bolt)
+          "low" -> Triple("低 (Low)", "軽い思考。日常会話や簡単な指示に最適。", Icons.Default.Check)
+          "medium" -> Triple("中 (Medium)", "バランス型。推論と思考を適度に行います。", Icons.Default.Refresh)
+          "high" -> Triple("高 (High)", "最大推論。複雑な論理やコード生成を徹底思考。", Icons.Default.Shield)
+          else -> Triple(option.label, "カスタム設定", Icons.Default.Check)
+        }
+
         Surface(
-          onClick = { if (!optionSelected) onSelect(option.id) },
+          onClick = { if (!isSelected) onSelect(option.id) },
           enabled = enabled,
-          modifier = Modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget).semantics { selected = optionSelected },
-          color = Color.Transparent,
+          shape = RoundedCornerShape(12.dp),
+          color = if (isSelected) ClawTheme.colors.surfaceRaised else Color.Transparent,
+          border = BorderStroke(
+            width = if (isSelected) 1.5.dp else 1.dp,
+            color = if (isSelected) ClawTheme.colors.primary else ClawTheme.colors.border,
+          ),
+          modifier = Modifier.fillMaxWidth().heightIn(min = ClawTheme.spacing.touchTarget).semantics { selected = isSelected },
         ) {
           Row(
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
           ) {
-            Text(chatThinkingOptionLabel(option, languageTag), style = ClawTheme.type.body)
-            if (optionSelected) Icon(Icons.Default.Check, contentDescription = nativeString("Selected"))
+            Icon(
+              imageVector = icon,
+              contentDescription = null,
+              tint = if (isSelected) ClawTheme.colors.primary else ClawTheme.colors.textMuted,
+              modifier = Modifier.size(22.dp),
+            )
+            Column(modifier = Modifier.weight(1f)) {
+              Text(
+                text = title,
+                style = ClawTheme.type.body.copy(fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal),
+                color = if (isSelected) ClawTheme.colors.text else ClawTheme.colors.textMuted,
+              )
+              Text(
+                text = subtitle,
+                style = ClawTheme.type.caption,
+                color = ClawTheme.colors.textSubtle,
+              )
+            }
+            if (isSelected) {
+              Icon(
+                Icons.Default.Check,
+                contentDescription = "選択中",
+                tint = ClawTheme.colors.primary,
+                modifier = Modifier.size(20.dp),
+              )
+            }
           }
         }
       }
@@ -3039,7 +3130,12 @@ private fun ChatEffortSheet(
   onFastModeChange: (Boolean) -> Unit,
   onDismiss: () -> Unit,
 ) {
-  val thinkingOptions = if (thinkingSupported) options else emptyList()
+  val thinkingOptions =
+    if (options.size > 1) {
+      options
+    } else {
+      defaultChatThinkingLevelSelection.options
+    }
   ModalBottomSheet(
     onDismissRequest = onDismiss,
     sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
@@ -3054,14 +3150,12 @@ private fun ChatEffortSheet(
           .verticalScroll(rememberScrollState())
           .padding(bottom = 24.dp),
     ) {
-      if (thinkingOptions.isNotEmpty()) {
-        ChatEffortSliderControl(
-          options = thinkingOptions,
-          selectedId = selectedId,
-          enabled = thinkingLevelEnabled,
-          onSelect = onSelect,
-        )
-      }
+      ChatEffortSliderControl(
+        options = thinkingOptions,
+        selectedId = selectedId,
+        enabled = true,
+        onSelect = onSelect,
+      )
       if (thinkingOptions.isNotEmpty()) {
         HorizontalDivider(color = ClawTheme.colors.border, modifier = Modifier.padding(top = 14.dp))
       }
@@ -3219,7 +3313,10 @@ private fun ChatModelPickerSheet(
     // Keep the outer sheet unconstrained: Material anchors use the full window height.
     // Cap only its scrollable content against the actual inset-adjusted available bounds.
     BoxWithConstraints {
-      Box(Modifier.heightIn(max = maxHeight * 0.5f)) {
+      // Both pages share one fixed height: Material keeps the anchor from the first page, so a taller
+      // permission page would otherwise extend below the window and hide its last rows.
+      // Leave room for the drag handle and top inset on short windows.
+      Box(Modifier.height((maxHeight * 0.85f).coerceAtMost(maxHeight - CHAT_MODEL_SHEET_RESERVED_HEIGHT).coerceAtLeast(0.dp))) {
         if (showPermissionPicker) {
           ChatPermissionPicker(
             selectedMode = permissionMode,
@@ -3700,22 +3797,28 @@ private fun ChatInputPill(
               ),
           )
         }
-        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-          ChatComposerModelPicker(
-            label = selectedModelLabel,
-            contextUsage = contextUsage,
-            enabled = modelPickerEnabled,
-            onClick = onOpenModelPicker,
-            modifier = Modifier.weight(1f, fill = false),
-          )
-          if (thinkingSupported || fastModeEnabled || fastMode) {
+        BoxWithConstraints(modifier = Modifier.weight(1f)) {
+          // The text chip only fits beside a readable model name on wider rows; narrow rows keep the gauge.
+          val showThinkingLabel = maxWidth >= CHAT_THINKING_LABEL_MIN_ROW_WIDTH
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            ChatComposerModelPicker(
+              label = selectedModelLabel,
+              contextUsage = contextUsage,
+              enabled = modelPickerEnabled,
+              onClick = onOpenModelPicker,
+              modifier = Modifier.weight(1f, fill = false),
+            )
             ChatThinkingLevelPicker(
-              options = thinkingOptions,
+              options = if (thinkingOptions.size > 1) thinkingOptions else defaultChatThinkingLevelSelection.options,
               selectedId = thinkingLevel,
               thinkingSupported = thinkingSupported,
               thinkingLevelEnabled = thinkingLevelEnabled,
               fastMode = fastMode,
               fastModeEnabled = fastModeEnabled,
+              showLabel = showThinkingLabel,
               onSelect = onThinkingLevelChange,
               onFastModeChange = onFastModeChange,
             )

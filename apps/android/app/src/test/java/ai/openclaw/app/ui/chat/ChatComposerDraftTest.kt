@@ -994,7 +994,7 @@ class ChatComposerDraftTest {
         sendInFlight = false,
       ),
     )
-    assertFalse(
+    assertTrue(
       chatComposerSendEnabled(
         voiceNoteState = VoiceNoteRecorderState.Idle,
         talkActive = false,

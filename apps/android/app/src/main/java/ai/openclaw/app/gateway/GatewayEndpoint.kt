@@ -20,6 +20,7 @@ data class GatewayEndpoint(
       port: Int,
       tlsEnabled: Boolean = false,
       contextPath: String = "",
+      tlsFingerprintSha256: String? = null,
     ): GatewayEndpoint {
       val normalizedContextPath = normalizeGatewayContextPath(contextPath)
       val stableIdPath = if (normalizedContextPath.isEmpty()) "" else "|$normalizedContextPath"
@@ -29,7 +30,7 @@ data class GatewayEndpoint(
         host = host,
         port = port,
         tlsEnabled = tlsEnabled,
-        tlsFingerprintSha256 = null,
+        tlsFingerprintSha256 = tlsFingerprintSha256,
         contextPath = normalizedContextPath,
       )
     }

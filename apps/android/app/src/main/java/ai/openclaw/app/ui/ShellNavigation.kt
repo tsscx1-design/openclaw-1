@@ -16,6 +16,7 @@ internal class ShellNavigation(
   returnTab: Tab? = null,
   settingsRouteFromHome: Boolean = false,
   dashboardSessionKey: String = "main",
+  settingsRouteStack: List<SettingsRoute> = emptyList(),
 ) {
   var activeTab by mutableStateOf(activeTab)
     private set
@@ -33,16 +34,26 @@ internal class ShellNavigation(
   // Home) from one opened cross-tab (Back leaves the Settings tab entirely).
   private var settingsRouteFromHome by mutableStateOf(settingsRouteFromHome)
 
+  // Navigation stack within settings routes to allow hierarchical back traversal
+  // (e.g., Home -> PartnerManagement -> PartnerCharacterSheet -> back to PartnerManagement).
+  private var settingsRouteStack by mutableStateOf(settingsRouteStack)
+
   /** Tab-bar-style switch: Back from the selected tab returns to Overview. */
   fun selectTab(tab: Tab) {
-    if (tab == Tab.Settings) settingsRoute = SettingsRoute.Home
+    if (tab == Tab.Settings) {
+      settingsRoute = SettingsRoute.Home
+      settingsRouteStack = emptyList()
+    }
     settingsRouteFromHome = false
     returnTab = null
     activeTab = tab
   }
 
-  /** Opens a settings route from another tab, remembering the origin for Back. */
+  /** Opens a settings route from another tab, or deeper from an existing settings detail. */
   fun openSettingsRoute(route: SettingsRoute) {
+    if (activeTab == Tab.Settings && settingsRoute != route) {
+      settingsRouteStack = settingsRouteStack + settingsRoute
+    }
     settingsRoute = route
     settingsRouteFromHome = false
     openDetailTab(Tab.Settings)
@@ -50,6 +61,7 @@ internal class ShellNavigation(
 
   /** Opens a settings route from the Settings Home list; Back returns to Home. */
   fun openSettingsRouteFromHome(route: SettingsRoute) {
+    settingsRouteStack = listOf(SettingsRoute.Home)
     settingsRoute = route
     settingsRouteFromHome = true
   }
@@ -66,13 +78,20 @@ internal class ShellNavigation(
     openDetailTab(Tab.Dashboard)
   }
 
-  /** Unwinds one Back step: settings detail to Home or origin, otherwise tab to origin or Overview. */
+  /** Unwinds one Back step: settings detail to previous in stack or Home, otherwise tab to origin or Overview. */
   fun back() {
-    if (activeTab == Tab.Settings && settingsRoute != SettingsRoute.Home) {
-      settingsRoute = SettingsRoute.Home
-      if (settingsRouteFromHome) {
-        settingsRouteFromHome = false
+    if (activeTab == Tab.Settings) {
+      if (settingsRouteStack.isNotEmpty()) {
+        val previous = settingsRouteStack.last()
+        settingsRouteStack = settingsRouteStack.dropLast(1)
+        settingsRoute = previous
         return
+      } else if (settingsRoute != SettingsRoute.Home) {
+        settingsRoute = SettingsRoute.Home
+        if (settingsRouteFromHome) {
+          settingsRouteFromHome = false
+          return
+        }
       }
     }
     if (activeTab == Tab.Dashboard) dashboardSessionKey = "main"
@@ -95,15 +114,23 @@ internal class ShellNavigation(
             nav.returnTab?.name.orEmpty(),
             nav.settingsRouteFromHome.toString(),
             nav.dashboardSessionKey,
+            nav.settingsRouteStack.joinToString(",") { it.name },
           )
         },
         restore = { saved ->
+          val stack =
+            saved.getOrNull(5)
+              ?.takeIf { it.isNotEmpty() }
+              ?.split(",")
+              ?.mapNotNull { name -> runCatching { SettingsRoute.valueOf(name) }.getOrNull() }
+              ?: emptyList()
           ShellNavigation(
             activeTab = restoreTab(saved[0]),
             settingsRoute = SettingsRoute.valueOf(saved[1]),
             returnTab = saved[2].takeIf { it.isNotEmpty() }?.let(::restoreTab),
             settingsRouteFromHome = saved[3].toBoolean(),
             dashboardSessionKey = saved.getOrNull(4) ?: "main",
+            settingsRouteStack = stack,
           )
         },
       )

@@ -32,6 +32,16 @@ const DEVICE_PAIRING_JOIN_CODE_SCHEMA_START =
 const DEVICE_PAIRING_JOIN_CODE_SCHEMA_END = "\n) STRICT;";
 const CONFIG_REVISION_KEY_SCHEMA_START = "CREATE TABLE IF NOT EXISTS config_revision_keys (";
 const CONFIG_REVISION_KEY_SCHEMA_END = "\n) STRICT;";
+export function ensureAgentSoulsSchema(database: DatabaseSync): void {
+  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf("CREATE TABLE IF NOT EXISTS agent_souls (");
+  const marker = "\n) STRICT;";
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker, start);
+  if (start < 0 || end < start) {
+    throw new Error("Agent souls schema marker is missing.");
+  }
+  database.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + marker.length));
+}
+
 const repositoryWorkspacePendingSchemas = new WeakSet<DatabaseSync>();
 
 export function hasRepositoryWorkspacePendingResultSchema(database: DatabaseSync): boolean {

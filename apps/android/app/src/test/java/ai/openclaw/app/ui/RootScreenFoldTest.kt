@@ -44,6 +44,7 @@ import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasTestTag
@@ -352,8 +353,10 @@ class RootScreenFoldTest {
       ) { model ->
         val sessionKey = model.chatSessionKey.value
         composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
-        composeRule.onNodeWithText("Recent").performScrollTo().performClick()
-        val row = composeRule.onNodeWithText("Android QA").performScrollTo()
+        // Wide flat windows also show the session pane; address the drawer's copies.
+        val inDrawer = hasAnyAncestor(hasTestTag("sidebar-drawer"))
+        composeRule.onNode(hasText("Recent") and inDrawer).performScrollTo().performClick()
+        val row = composeRule.onNode(hasText("Android QA") and inDrawer).performScrollTo()
         val session = model.chatSessions.value.single { it.key == "discord:android" }
         val expectedPatch =
           buildJsonObject {
@@ -435,14 +438,16 @@ class RootScreenFoldTest {
       composeRule.mainClock.advanceTimeBy(1_000)
       composeRule.onNodeWithTag("sidebar-close").assertIsNotDisplayed()
 
+      // Wide windows show the navigation rail; the drawer's edge begins where the content does.
+      val contentLeft = original.left.toFloat()
       composeRule.onRoot().performTouchInput {
-        down(Offset(2f, 400f))
+        down(Offset(contentLeft + 2f, 400f))
         moveBy(Offset(80f, 0f), delayMillis = 32)
         moveBy(Offset(60f, 0f), delayMillis = 32)
       }
       composeRule.mainClock.advanceTimeBy(32)
       val opening = windowBounds(sheet)
-      assertTrue("A real held opening drag must be between native anchors", opening.left < 0 && opening.right > 0)
+      assertTrue("A real held opening drag must be between native anchors", opening.left < original.left && opening.right > original.left)
       emit(listOf(testFold(Rect(0, 200, view.width, 220))))
       composeRule.mainClock.advanceTimeBy(160)
       val relocatedOpening = windowBounds(sheet)
@@ -706,6 +711,11 @@ class RootScreenFoldTest {
       composeRule.onNodeWithTag("chat-composer-surface").assertIsDisplayed()
       composeRule.onNodeWithTag("sidebar-permanent").assertIsDisplayed()
       composeRule.onNode(hasText("Settings") and hasAnyAncestor(hasTestTag("sidebar-permanent"))).performScrollTo().performClick()
+      // Settings Home collapses this category by default.
+      composeRule
+        .onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
+        .performScrollToNode(hasTestTag("settings-section-Device"))
+      composeRule.onNodeWithTag("settings-section-Device").performClick()
       composeRule
         .onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
         .performScrollToNode(hasText("Appearance"))
@@ -714,6 +724,10 @@ class RootScreenFoldTest {
       emit(emptyList())
       emit(listOf(testFold(hinge)))
       composeRule.runOnIdle { backDispatcher.onBackPressed() }
+      // Settings Home restores its scroll position, so bring its header back before checking it.
+      composeRule
+        .onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex))
+        .performScrollToNode(hasContentDescription("Search settings"))
       composeRule.onNodeWithContentDescription("Search settings").assertIsDisplayed()
       composeRule.onNodeWithText("Theme family").assertDoesNotExist()
       composeRule.onNodeWithTag("sidebar-permanent").assertIsDisplayed()
@@ -797,8 +811,9 @@ class RootScreenFoldTest {
       emit(listOf(testFold(Rect(300, 0, 300, view.height))))
       assertEquals("Use the actual plane even below the modal drawer's maximum width", 300, windowBounds(composeRule.onNodeWithTag("sidebar-permanent")).right)
       emit(listOf(testFold(hinge, separating = false, state = FoldingFeature.State.FLAT)))
-      composeRule.onNodeWithTag("sidebar-permanent").assertDoesNotExist()
-      composeRule.onNodeWithTag("sidebar-open-settings").assertIsDisplayed()
+      // A fully opened foldable docks the list beside the destination instead of the modal drawer.
+      composeRule.onNodeWithTag("sidebar-permanent").assertIsDisplayed()
+      assertEquals(400, windowBounds(composeRule.onNodeWithTag("sidebar-permanent")).right)
       for (bounds in listOf(Rect(250, 0, 270, view.height), Rect(690, 0, 710, view.height), Rect(0, 400, view.width, 420))) {
         emit(listOf(testFold(bounds)))
         composeRule.onNodeWithTag("sidebar-permanent").assertDoesNotExist()

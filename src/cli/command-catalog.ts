@@ -133,6 +133,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       pluginRegistry: { scope: "configured-channels" },
     },
   },
+  { commandPath: ["skills"], policy: { loadPlugins: "always" } },
+  { commandPath: ["ollama"], policy: { loadPlugins: "never" } },
   { commandPath: ["directory"], policy: { loadPlugins: "always" } },
   {
     commandPath: ["sandbox"],

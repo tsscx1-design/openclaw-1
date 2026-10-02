@@ -221,10 +221,17 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     setSystemPrompt(legacySystemPrompt);
     log.debug(`hooks: applied systemPrompt (${legacySystemPrompt.length} chars)`);
   }
+  // The app can make the main agent speak as a selected AI partner; tools stay unchanged.
+  const mainChatPartnerContext =
+    input.isRawModelRun || input.sessionAgentId !== "main"
+      ? undefined
+      : await import("../../../gateway/server-methods/partner-features.js")
+          .then((module) => module.resolveMainChatPartnerSystemContext())
+          .catch(() => undefined);
   const composedSystemPrompt = composeSystemPromptWithHookContext({
     baseSystemPrompt: systemPromptText,
     prependSystemContext: hookResult?.prependSystemContext,
-    appendSystemContext: hookResult?.appendSystemContext,
+    appendSystemContext: joinHookContext(hookResult?.appendSystemContext, mainChatPartnerContext),
   });
   if (composedSystemPrompt) {
     setSystemPrompt(composedSystemPrompt);

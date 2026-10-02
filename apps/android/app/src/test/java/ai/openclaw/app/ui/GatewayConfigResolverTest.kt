@@ -71,9 +71,11 @@ class GatewayConfigResolverTest {
         "gateway.local:18790" to false,
         "GATEWAY.LOCAL.:18790" to false,
         "[::1]:18790" to false,
+        "100.64.0.9:18790" to false,
+        "gateway.tailnet.ts.net:18790" to false,
+        "node:18790" to false,
         "gateway.example:443" to true,
         "gateway.local.evil.com:18790" to true,
-        "100.64.0.9:18790" to true,
         "[2001:db8::1]:443" to true,
       )
 
@@ -139,8 +141,11 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun parseGatewayEndpointRejectsTailnetCleartextWsUrls() {
-    assertEndpointRejected("ws://100.64.0.9:18789")
+  fun parseGatewayEndpointAcceptsTailnetCleartextWsUrls() {
+    // Tailnet traffic is WireGuard-encrypted, so GatewayHostSecurity treats 100.64/10 as local.
+    val parsed = parseGatewayEndpoint("ws://100.64.0.9:18789")
+    assertEquals("100.64.0.9", parsed?.host)
+    assertEquals(false, parsed?.tls)
   }
 
   @Test
@@ -195,8 +200,6 @@ class GatewayConfigResolverTest {
     val rejected =
       listOf(
         "ws://gateway.local.evil.com:18789",
-        "ws://gatewaylocal:18789",
-        "ws://local:18789",
         "ws://.local:18789",
         "ws://gateway..local:18789",
         "ws://gateway.local%25wlan0:18789",
@@ -204,6 +207,10 @@ class GatewayConfigResolverTest {
 
     for (url in rejected) {
       assertNull(url, parseGatewayEndpoint(url))
+    }
+    // Single-label LAN names (no dots) are local by policy, unlike look-alike dotted suffixes above.
+    for (url in listOf("ws://gatewaylocal:18789", "ws://local:18789")) {
+      assertEquals(url, false, parseGatewayEndpoint(url)?.tls)
     }
   }
 

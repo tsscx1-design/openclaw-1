@@ -73,7 +73,6 @@ export async function planSystemAgentCommand(params: {
   return await planSystemAgentCommandWithConfiguredModel(params);
 }
 
-/** Plan only through the configured default agent's verified route. */
 export async function planSystemAgentCommandWithConfiguredModel(params: {
   input: string;
   overview: SystemAgentOverview;
@@ -86,22 +85,37 @@ export async function planSystemAgentCommandWithConfiguredModel(params: {
   if (!input) {
     return null;
   }
-  const prompt = buildSystemAgentAssistantUserPrompt({
+  let prompt = buildSystemAgentAssistantUserPrompt({
     input,
     overview: params.overview,
     ...(params.history ? { history: params.history } : {}),
     ...(params.pendingOperation ? { pendingOperation: params.pendingOperation } : {}),
   });
-  const result = await runConfiguredSystemAgentText({
-    prompt,
-    systemPrompt: SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
-    runIdPrefix: "openclaw-planner",
-    verifiedInference: params.verifiedInference,
-    deps: params.deps,
-    responseFormat: SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA,
-  });
-  const parsed = parseSystemAgentAssistantPlanText(result?.text);
-  return parsed && result ? { ...parsed, modelLabel: result.modelLabel } : null;
+
+  const MAX_RETRIES = 2;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const result = await runConfiguredSystemAgentText({
+      prompt,
+      systemPrompt: SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
+      runIdPrefix: "openclaw-planner",
+      verifiedInference: params.verifiedInference,
+      deps: params.deps,
+      responseFormat: SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA,
+    });
+    const parsed = parseSystemAgentAssistantPlanText(result?.text);
+    if (parsed && result) {
+      return { ...parsed, modelLabel: result.modelLabel };
+    }
+
+    // Self-Correction Loop for JSON parsing failures
+    if (result?.text) {
+      prompt += `\n\n[System Error]: Failed to parse JSON from your previous response. Please fix the error and output valid JSON only. Your invalid output was:\n${result.text}`;
+    } else {
+      break; // Stop retrying if there's no text output (e.g. fatal inference error)
+    }
+  }
+
+  return null;
 }
 
 /** One tool-free, verified inference turn for the cached caretaker greeting. */

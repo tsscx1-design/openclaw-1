@@ -34,8 +34,14 @@ internal fun FoldAwareContent(
       // current window offset even when an ancestor moves without changing our constraints.
       val origin = coordinates?.positionInWindow()?.round() ?: IntOffset.Zero
       val host = IntRect(origin, IntSize(width, height))
-      val book = if (bookPanesEnabled) bookPaneBounds(host, features, layoutDirection, density) else null
       val tabletop = if (tabletopEnabled) tabletopPaneBounds(host, features, layoutDirection) else null
+      val book =
+        if (bookPanesEnabled) {
+          bookPaneBounds(host, features, layoutDirection, density)
+            ?: if (tabletop == null) flatFoldablePaneBounds(host, features, layoutDirection, density) else null
+        } else {
+          null
+        }
       val fallback = foldSafeRegion(host, features, layoutDirection)
       val pane = if (book != null || tabletop != null) host else fallback
       val localBook = book?.let { BookPaneBounds(it.start.translate(-origin), it.end.translate(-origin)) }

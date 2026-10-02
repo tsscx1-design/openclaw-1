@@ -287,6 +287,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               ? `invalid connect params: ${formatValidationErrors(validateConnectParams.errors)}`
               : "invalid handshake: first request must be connect"
             : "invalid request frame";
+
+          if (!isRequestFrame) {
+            logWsControl.warn(
+              `invalid request frame detected. parsed JSON: ${JSON.stringify(parsed)}`,
+            );
+          }
+
           setHandshakeState("failed");
           setCloseCause("invalid-handshake", {
             frameType,

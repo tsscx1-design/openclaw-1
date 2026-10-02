@@ -32,6 +32,28 @@ internal data class BookPaneBounds(
   val end: IntRect,
 )
 
+/**
+ * A fully opened (FLAT) foldable reports its hinge without separating the screen. Treat the wide
+ * inner display like an open book anyway: navigation and conversations stay on the start side and
+ * the destination fills the rest, reusing the book layout that keeps drafts across posture changes.
+ */
+internal fun flatFoldablePaneBounds(
+  host: IntRect,
+  features: List<DisplayFeature>,
+  direction: LayoutDirection,
+  density: Density,
+): BookPaneBounds? {
+  if (features.filterIsInstance<FoldingFeature>().none { it.state == FoldingFeature.State.FLAT }) return null
+  with(density) {
+    if (host.width < 600.dp.roundToPx() || host.height < 320.dp.roundToPx()) return null
+    val startWidth = (host.width * 0.4f).toInt().coerceIn(280.dp.roundToPx(), 400.dp.roundToPx())
+    if (host.width - startWidth < 320.dp.roundToPx()) return null
+    val left = host.copy(right = host.left + startWidth)
+    val right = host.copy(left = host.left + startWidth)
+    return if (direction == LayoutDirection.Ltr) BookPaneBounds(left, right) else BookPaneBounds(host.copy(left = host.right - startWidth), host.copy(right = host.right - startWidth))
+  }
+}
+
 /** Physical window rectangles. Partial or additional separators retain the root safety fallback. */
 internal fun bookPaneBounds(
   host: IntRect,

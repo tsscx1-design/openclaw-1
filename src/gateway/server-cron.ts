@@ -121,6 +121,7 @@ import {
   fenceScheduledGatewayContextResolver,
   runWithScheduledGatewayContext,
 } from "./scheduled-run-gateway-context.js";
+import { reconcileContextCompressionJobs } from "./server-cron-context-compression-jobs.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import {
   dispatchGatewayCronFinishedNotifications,
@@ -1539,6 +1540,7 @@ export function buildGatewayCronService(params: {
         for (const reconcile of [
           reconcileHeartbeatMonitorJobs,
           reconcileSkillCollectionReviewJobs,
+          reconcileContextCompressionJobs,
         ]) {
           const { ok } = await reconcile({
             cron,

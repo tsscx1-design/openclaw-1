@@ -520,6 +520,10 @@ class ChatController internal constructor(
 
   private val _streamingAssistantText = MutableStateFlow<String?>(null)
   val streamingAssistantText: StateFlow<String?> = _streamingAssistantText.asStateFlow()
+  private val _streamingThinkingText = MutableStateFlow<String?>(null)
+  val streamingThinkingText: StateFlow<String?> = _streamingThinkingText.asStateFlow()
+
+  // Owns both live answer and live reasoning text; they belong to the same run and retire together.
   private var streamingAssistantOwner: ChatRunOwner? = null
 
   private val pendingToolCallsById = ConcurrentHashMap<String, OwnedPendingToolCall>()
@@ -1355,6 +1359,25 @@ class ChatController internal constructor(
         }
       } else {
         requestGateway("sessions.patch", params.toString())
+      }
+      val newLabel = if (clearLabel) null else (label?.trim()?.takeIf(String::isNotEmpty))
+      val newCategory = if (clearCategory) null else (category?.trim()?.takeIf(String::isNotEmpty))
+      val newColor = if (clearColor) null else color
+      _sessions.update { list ->
+        list.map { entry ->
+          if (entry.key == sessionKey) {
+            entry.copy(
+              label = if (clearLabel || label != null) newLabel else entry.label,
+              category = if (clearCategory || category != null) newCategory else entry.category,
+              color = if (clearColor || color != null) newColor else entry.color,
+              pinned = pinned ?: entry.pinned,
+              archived = archived ?: entry.archived,
+              unread = unread ?: entry.unread,
+            )
+          } else {
+            entry
+          }
+        }
       }
       fetchSessionsForCurrentWindow()
       return true
@@ -2552,8 +2575,9 @@ class ChatController internal constructor(
   fun setThinkingLevel(thinkingLevel: String) {
     val normalized = normalizeThinking(thinkingLevel)
     val selection = _thinkingLevelSelection.value
-    if (selection.isGatewayProvided && selection.options.none { it.id == normalized }) return
+    if (selection.isGatewayProvided && selection.options.size > 1 && selection.options.none { it.id == normalized }) return
     if (normalized == _thinkingLevel.value) return
+    // The settings lane snapshots the confirmed level before publishing this intent optimistically.
     val key = normalizeRequestedSessionKey(_sessionKey.value)
     val queued = enqueueSessionSettingsMutation(sessionSettingsKey(key), ThinkingIntent(normalized))
     scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -2874,7 +2898,8 @@ class ChatController internal constructor(
           put("agentId", JsonPrimitive(ownerAgentId))
           put("limit", JsonPrimitive(1))
         }
-      while (true) {
+      var attempts = 0
+      while (attempts++ < 3) {
         var settingsRevision = 0L
         val response =
           lease.request("chat.history", params.toString()) { enqueue ->
@@ -6889,6 +6914,14 @@ class ChatController internal constructor(
         }
       }
 
+      "thinking" -> {
+        // The Gateway sends the cumulative reasoning text; the delta alone cannot rebuild it after a dropped frame.
+        val text = data?.get("text")?.asStringOrNull()
+        if (!text.isNullOrBlank()) {
+          updateStreamingThinkingText(runId, text)
+        }
+      }
+
       "tool" -> {
         val phase = data?.get("phase")?.asStringOrNull()
         val name = data?.get("name")?.asStringOrNull()
@@ -7166,6 +7199,16 @@ class ChatController internal constructor(
     }
   }
 
+  private fun updateStreamingThinkingText(
+    runId: String?,
+    text: String,
+  ) {
+    synchronized(gatewayScopeApplyLock) {
+      streamingAssistantOwner = liveRunOwner(runId)
+      _streamingThinkingText.value = text
+    }
+  }
+
   private fun clearLiveRunUi(
     runId: String? = null,
     owner: ChatComposerOwner? = currentChatComposerRoutingOwner(),
@@ -7176,6 +7219,7 @@ class ChatController internal constructor(
       if (runId == null || streamingAssistantOwner == retiringOwner) {
         streamingAssistantOwner = null
         _streamingAssistantText.value = null
+        _streamingThinkingText.value = null
       }
       if (runId == null) {
         pendingToolCallsById.clear()
@@ -8051,23 +8095,18 @@ class ChatController internal constructor(
     val advertised = entry?.thinkingLevels
     if (advertised == null) {
       _thinkingLevelSelection.value = defaultChatThinkingLevelSelection
-      val requestedLevel =
-        entry
-          ?.thinkingLevel
-          ?.takeIf { it.isNotBlank() }
-          ?.let(::normalizeThinking)
-          ?: normalizeThinking(fallbackLevel)
+      val currentLevel = normalizeThinking(fallbackLevel)
+      val requestedLevel = entry?.thinkingLevel?.takeIf { it.isNotBlank() && it != "off" }?.let(::normalizeThinking)
+      // A non-off session level is authoritative; a reported "off" must not erase a local choice.
       _thinkingLevel.value =
-        if (entry?.thinkingLevel != null) {
-          requestedLevel
-        } else {
-          requestedLevel.takeIf { candidate ->
-            defaultChatThinkingLevelSelection.options.any { it.id == candidate }
-          } ?: "off"
-        }
+        requestedLevel
+          ?: currentLevel.takeIf { candidate ->
+            candidate != "off" && defaultChatThinkingLevelSelection.options.any { it.id == candidate }
+          }
+          ?: "off"
       return
     }
-    val options =
+    val rawOptions =
       advertised
         .map { option ->
           val id = normalizeThinking(option.id)
@@ -8076,20 +8115,22 @@ class ChatController internal constructor(
             label = option.label.trim().takeIf { it.isNotEmpty() } ?: id,
           )
         }.distinctBy { it.id }
-        .ifEmpty { listOf(ChatThinkingLevelOption(id = "off", label = "Off")) }
+    val options = if (rawOptions.size > 1) rawOptions else defaultChatThinkingLevelSelection.options
     _thinkingLevelSelection.value =
       ChatThinkingLevelSelection(
         options = options,
-        isGatewayProvided = true,
+        isGatewayProvided = rawOptions.size > 1,
       )
-    val selected = entry.thinkingLevel?.let(::normalizeThinking)
+    val selected = entry.thinkingLevel?.takeIf { it.isNotBlank() && it != "off" }?.let(::normalizeThinking)
     val currentLevel = normalizeThinking(fallbackLevel)
     val defaultLevel = entry.thinkingDefault?.let(::normalizeThinking)
     // Lightweight picker metadata can omit a Gateway-validated effective level.
-    // Preserve that send state; only local/default fallbacks require picker membership.
+    // A non-off session level wins; otherwise keep the local choice when the picker offers it.
     _thinkingLevel.value =
       selected
-        ?: listOf(currentLevel, defaultLevel).firstOrNull { candidate -> options.any { it.id == candidate } }
+        ?: listOf(currentLevel, defaultLevel).firstOrNull { candidate ->
+          candidate != null && candidate != "off" && options.any { it.id == candidate }
+        }
         ?: options.first().id
   }
 

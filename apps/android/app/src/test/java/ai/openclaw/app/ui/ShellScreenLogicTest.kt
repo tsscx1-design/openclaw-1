@@ -182,7 +182,7 @@ class ShellScreenLogicTest {
 
     val saveAnything = SaverScope { true }
     val saved = with(ShellNavigation.Saver) { saveAnything.save(returnToVoice) }!!
-    assertEquals(listOf("Chat", "Home", "", "false", "main"), saved)
+    assertEquals(listOf("Chat", "Home", "", "false", "main", ""), saved)
   }
 
   @Test
@@ -806,11 +806,11 @@ class ShellScreenLogicTest {
 
     assertEquals(
       listOf(
-        "Connection" to listOf(SettingsRoute.Gateway, SettingsRoute.NodesDevices),
-        "Agents & automation" to listOf(SettingsRoute.SystemAgent, SettingsRoute.ProvidersModels, SettingsRoute.Approvals, SettingsRoute.CronJobs),
-        "Phone context & privacy" to listOf(SettingsRoute.Voice, SettingsRoute.PhoneCapabilities, SettingsRoute.Notifications),
-        "Profile & device" to listOf(SettingsRoute.Appearance),
-        "Diagnostics" to listOf(SettingsRoute.Health),
+        "🧠 AI・モデル" to listOf(SettingsRoute.SystemAgent, SettingsRoute.ProvidersModels),
+        "⚙️ 自動化・ツール" to listOf(SettingsRoute.Approvals, SettingsRoute.CronJobs),
+        "🔗 接続" to listOf(SettingsRoute.Gateway, SettingsRoute.NodesDevices),
+        "📱 この端末" to listOf(SettingsRoute.Voice, SettingsRoute.Appearance, SettingsRoute.PhoneCapabilities, SettingsRoute.Notifications),
+        "🩺 情報・診断" to listOf(SettingsRoute.Health),
       ),
       sections.map { section -> section.title.resolveNativeText() to section.rows.map { it.route } },
     )

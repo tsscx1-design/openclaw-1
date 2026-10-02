@@ -29,8 +29,10 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -124,8 +126,8 @@ class CommandPaletteLogicTest {
     assertEquals("Empty search must keep the compact quick-action menu", 5, quickActions.size)
     assertEquals(providerSubtitle, quickActions.single { it.action == providerAction }.subtitle.resolveNativeText())
 
-    val categoryMatches = commandItems(query = nativeString("Agents & automation"), desktopObserveAvailable = false, providerSubtitle = providerSubtitle)
-    assertTrue(categoryMatches.any { it.action == CommandAction.Settings(SettingsRoute.CronJobs) })
+    val categoryMatches = commandItems(query = nativeString("🧠 AI・モデル"), desktopObserveAvailable = false, providerSubtitle = providerSubtitle)
+    assertTrue(categoryMatches.any { it.action == CommandAction.Settings(SettingsRoute.Skills) })
     assertEquals(providerSubtitle, categoryMatches.single { it.action == providerAction }.subtitle.resolveNativeText())
 
     // These destinations are outside the main Settings row group but still own routes.
@@ -155,6 +157,9 @@ class CommandPaletteLogicTest {
     val value = nativeString("Review readiness")
     assertTrue(title.startsWith("Fournisseurs"))
     withShell(HomeDestination.Settings, Modifier.width(320.dp), { fontScale.value }) { backDispatcher, assertRuntimeUnchanged ->
+      expandSettingsSection(SettingsCategory.AiModels)
+      expandSettingsSection(SettingsCategory.Device)
+      expandSettingsSection(SettingsCategory.Info)
       for (scale in listOf(1f, 2f)) {
         composeRule.runOnIdle { fontScale.value = scale }
         composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasText(title))
@@ -174,8 +179,10 @@ class CommandPaletteLogicTest {
         }
         assertRuntimeUnchanged()
       }
-      composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasText(nativeString("Appearance")))
-      composeRule.onNodeWithContentDescription(settingsRowDisclosureDescription(nativeString("Appearance"), opensRoute = true)).performClick()
+      // The quick-access tiles also show Appearance; scroll to the row's disclosure instead.
+      val appearanceDisclosure = settingsRowDisclosureDescription(nativeString("Appearance"), opensRoute = true)
+      composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasContentDescription(appearanceDisclosure))
+      composeRule.onNodeWithContentDescription(appearanceDisclosure).performClick()
       composeRule.onNodeWithText(nativeString("Theme family")).assertIsDisplayed()
       composeRule.runOnIdle { backDispatcher.onBackPressed() }
       composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasText(nativeString("Licenses")))
@@ -250,22 +257,30 @@ class CommandPaletteLogicTest {
         }
         composeRule.onNode(hasText(nativeString("Settings")) and hasClickAction() and hasAnyAncestor(searchResults)).performClick()
         composeRule.onNode(hasSetTextAction()).assertDoesNotExist()
-        composeRule.onNodeWithTag("sidebar-open-settings").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(nativeString("Search settings")).assertIsDisplayed()
         assertRuntimeUnchanged()
       }
       assertTrue("Quick actions must expose their complete title and description:\n${failures.joinToString("\n")}", failures.isEmpty())
     }
   }
 
+  /** Settings Home collapses most categories by default; open one before addressing its rows. */
+  private fun expandSettingsSection(category: SettingsCategory) {
+    val tag = "settings-section-${category.name}"
+    composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasTestTag(tag))
+    composeRule.onNodeWithTag(tag).performClick()
+    composeRule.waitForIdle()
+  }
+
   private fun verifyAppearanceSearch(origin: HomeDestination) {
     val fromSettings = origin == HomeDestination.Settings
-    val originTag = if (fromSettings) "sidebar-open-settings" else "sidebar-open-overview"
     val searchDescription = if (fromSettings) nativeString("Search settings") else nativeString("Search")
     val appearance = nativeString("Appearance")
     withShell(origin) { backDispatcher, assertRuntimeUnchanged ->
       fun assertOrigin() {
         composeRule.onNode(hasSetTextAction()).assertDoesNotExist()
-        composeRule.onNodeWithTag(originTag).assertIsDisplayed()
+        // Compact windows show the bottom bar instead of a sidebar button; each origin owns its header search.
+        composeRule.onNodeWithContentDescription(searchDescription).assertIsDisplayed()
         composeRule.onNodeWithText(nativeString("Theme family")).assertDoesNotExist()
         assertRuntimeUnchanged()
       }

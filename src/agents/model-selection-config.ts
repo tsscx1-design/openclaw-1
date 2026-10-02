@@ -36,3 +36,14 @@ export function resolveSubagentConfiguredModelSelection(params: {
     (params.includeAgentPrimary === false ? undefined : normalizeModelSelection(agentConfig?.model))
   );
 }
+
+export function resolveTaskModelSelection(params: {
+  cfg: OpenClawConfig;
+  taskId: string;
+}): string | undefined {
+  const taskModels = params.cfg.models?.taskModels;
+  if (!taskModels) {
+    return undefined;
+  }
+  return normalizeModelSelection(taskModels[params.taskId]);
+}

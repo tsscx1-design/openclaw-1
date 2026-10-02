@@ -47,6 +47,8 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "session_status", family: "openclaw" },
   { name: "show_widget", family: "openclaw" },
   { name: "progress_card", family: "openclaw" },
+  { name: "delegate_specialist_task", family: "openclaw" },
+  { name: "partner_create_from_character", family: "openclaw" },
   { name: "sessions", family: "openclaw" },
   { name: "sessions_history", family: "openclaw" },
   { name: "sessions_list", family: "openclaw" },

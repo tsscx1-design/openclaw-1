@@ -188,6 +188,7 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<
   ],
   [["secrets"], async (program) => (await import("../secrets-cli.js")).registerSecretsCli(program)],
   [["skills"], async (program) => (await import("../skills-cli.js")).registerSkillsCli(program)],
+  [["ollama"], async (program) => (await import("../ollama-cli.js")).registerOllamaCli(program)],
   [["update"], async (program) => (await import("../update-cli.js")).registerUpdateCli(program)],
 ];
 

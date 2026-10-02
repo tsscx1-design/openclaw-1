@@ -476,6 +476,10 @@ class GatewaySession(
           reconnectSignal.trySend(Unit)
         }
       }
+      // J-2 修正: 古い接続のクローズをログに記録（冪等: runLoopのfinallyでも安全に再呼出し可）
+      if (connectionToClose != null) {
+        android.util.Log.d("GatewaySession", "connect: closing previous connection before reconnect to ${endpoint.host}")
+      }
       connectionToClose?.closeQuietly()
     }
   }
@@ -517,6 +521,10 @@ class GatewaySession(
           }
         }
       disconnectTail = cleanup
+    }
+    // J-2 修正: 接続解放のトレーサビリティ向上
+    if (connectionToClose != null) {
+      android.util.Log.d("GatewaySession", "scheduleDisconnect: closing connection, cleanup job queued")
     }
     connectionToClose?.closeQuietly()
     cleanup.start()
@@ -1638,13 +1646,13 @@ class GatewaySession(
       val clientObj =
         buildJsonObject {
           put("id", JsonPrimitive(client.id))
-          client.displayName?.let { put("displayName", JsonPrimitive(it)) }
+          client.displayName?.takeIf { it.isNotBlank() }?.let { put("displayName", JsonPrimitive(it)) }
           put("version", JsonPrimitive(client.version))
           put("platform", JsonPrimitive(client.platform))
           put("mode", JsonPrimitive(client.mode))
-          client.instanceId?.let { put("instanceId", JsonPrimitive(it)) }
-          client.deviceFamily?.let { put("deviceFamily", JsonPrimitive(it)) }
-          client.modelIdentifier?.let { put("modelIdentifier", JsonPrimitive(it)) }
+          client.instanceId?.takeIf { it.isNotBlank() }?.let { put("instanceId", JsonPrimitive(it)) }
+          client.deviceFamily?.takeIf { it.isNotBlank() }?.let { put("deviceFamily", JsonPrimitive(it)) }
+          client.modelIdentifier?.takeIf { it.isNotBlank() }?.let { put("modelIdentifier", JsonPrimitive(it)) }
         }
 
       val authJson =

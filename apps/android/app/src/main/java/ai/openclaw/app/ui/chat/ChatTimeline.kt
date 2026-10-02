@@ -342,6 +342,26 @@ private fun latestContentVersion(
   }
 }
 
+private const val THINKING_PREVIEW_MAX_LINES = 4
+private const val THINKING_PREVIEW_MAX_CHARS = 280
+
+/**
+ * Bounded tail of live reasoning for the working bubble. Only shown before answer text streams;
+ * once the answer starts, the answer bubble is the live surface.
+ */
+internal fun thinkingPreviewTail(
+  thinkingText: String?,
+  streamingAssistantText: String?,
+): String? {
+  if (!streamingAssistantText.isNullOrBlank()) return null
+  val lines = thinkingText?.trim()?.lines()?.map(String::trimEnd)?.filter(String::isNotBlank) ?: return null
+  if (lines.isEmpty()) return null
+  val tail = lines.takeLast(THINKING_PREVIEW_MAX_LINES).joinToString("\n")
+  val truncated = lines.size > THINKING_PREVIEW_MAX_LINES || tail.length > THINKING_PREVIEW_MAX_CHARS
+  val bounded = if (tail.length > THINKING_PREVIEW_MAX_CHARS) tail.takeLast(THINKING_PREVIEW_MAX_CHARS) else tail
+  return if (truncated) "…" + bounded.trimStart() else bounded
+}
+
 internal fun chatTimelineItemKey(item: ChatTimelineItem): String =
   when (item) {
     is ChatTimelineItem.Message -> "message:${item.message.id}"

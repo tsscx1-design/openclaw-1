@@ -1,12 +1,16 @@
 export const HEARTBEAT_TASK_DECLARATION_PREFIX = "heartbeat-task:";
 export const HEARTBEAT_DECLARATION_PREFIX = "heartbeat:";
 export const SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX = "skill-collection-review:";
+export const CONTEXT_COMPRESSION_DECLARATION_PREFIX = "context-compression:";
+export const PARTNER_MEMORY_CONSOLIDATION_DECLARATION_PREFIX = "partner-memory-consolidation:";
 
 /** Reserved creation namespaces, including Doctor-imported operator tasks. */
 const SYSTEM_OWNED_DECLARATION_PREFIXES = [
   HEARTBEAT_TASK_DECLARATION_PREFIX,
   HEARTBEAT_DECLARATION_PREFIX,
   SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX,
+  CONTEXT_COMPRESSION_DECLARATION_PREFIX,
+  PARTNER_MEMORY_CONSOLIDATION_DECLARATION_PREFIX,
 ];
 
 export function systemOwnedDeclarationKeyNamespace(
@@ -19,6 +23,8 @@ export function isSystemMonitorDeclaration(declarationKey: string | undefined): 
   // Imported heartbeat tasks remain operator-editable; only monitors are config-owned.
   return (
     declarationKey?.startsWith(HEARTBEAT_DECLARATION_PREFIX) === true ||
-    declarationKey?.startsWith(SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX) === true
+    declarationKey?.startsWith(SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX) === true ||
+    declarationKey?.startsWith(CONTEXT_COMPRESSION_DECLARATION_PREFIX) === true ||
+    declarationKey?.startsWith(PARTNER_MEMORY_CONSOLIDATION_DECLARATION_PREFIX) === true
   );
 }

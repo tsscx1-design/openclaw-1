@@ -161,7 +161,8 @@ function isMobilePairingCleartextAllowedHost(host: string): boolean {
     normalized === "localhost" ||
     isLoopbackIpAddress(normalized) ||
     normalized === "10.0.2.2" ||
-    isPrivateLanHost(normalized)
+    isPrivateLanHost(normalized) ||
+    isCarrierGradeNatIpv4Address(normalized)
   );
 }
 

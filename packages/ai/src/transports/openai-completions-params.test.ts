@@ -256,6 +256,31 @@ describe("openai completions params", () => {
     expect(params.max_completion_tokens).toBe(4_096 - 2 - 1);
   });
 
+  it("keeps a usable output floor when a conservative CJK estimate reaches the context cap", () => {
+    // The CJK-aware estimate counts each CJK char as ~1.25 tokens, so a prompt
+    // that really fits can still look larger than contextTokens. Clamping to the
+    // raw remainder would send max_tokens=1 and end the turn with stopReason=length.
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "qwen3-5-122b-a10b-nvfp4",
+        name: "qwen3-5-122b-a10b-nvfp4",
+        api: "openai-completions",
+        provider: "vllm",
+        baseUrl: "http://localhost:8000/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 24_576,
+        contextTokens: 18_000,
+        maxTokens: 4_096,
+      } as unknown as Model<"openai-completions">,
+      emptyContext("你好世界".repeat(3_750)),
+      undefined,
+    );
+
+    expect(params.max_completion_tokens).toBe(2_048);
+  });
+
   it("clamps max_completion_tokens for proxy-like endpoints when configured maxTokens >= contextWindow and prompt is small", () => {
     // Misconfig case: tiny prompt, but configured maxTokens still exceeds the
     // model's contextWindow. Clamp should land just under the window.

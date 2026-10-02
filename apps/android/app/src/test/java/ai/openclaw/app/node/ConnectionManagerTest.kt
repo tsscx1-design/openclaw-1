@@ -131,13 +131,14 @@ class ConnectionManagerTest {
     assertTrue(isLocalCleartextGatewayHost("gateway.local"))
     assertTrue(isLocalCleartextGatewayHost("GATEWAY.LOCAL."))
     assertFalse(isLocalCleartextGatewayHost("gateway.local.evil.com"))
-    assertFalse(isLocalCleartextGatewayHost("gatewaylocal"))
-    assertFalse(isLocalCleartextGatewayHost("local"))
+    assertTrue(isLocalCleartextGatewayHost("gatewaylocal"))
+    assertTrue(isLocalCleartextGatewayHost("local"))
     assertFalse(isLocalCleartextGatewayHost(".local"))
     assertFalse(isLocalCleartextGatewayHost("gateway..local"))
     assertFalse(isLocalCleartextGatewayHost("gateway.local%25wlan0"))
-    assertFalse(isLocalCleartextGatewayHost("100.64.0.9"))
-    assertFalse(isLocalCleartextGatewayHost("gateway.tailnet.ts.net"))
+    assertTrue(isLocalCleartextGatewayHost("100.64.0.9"))
+    assertTrue(isLocalCleartextGatewayHost("gateway.tailnet.ts.net"))
+    assertFalse(isLocalCleartextGatewayHost("example.com"))
   }
 
   @Test

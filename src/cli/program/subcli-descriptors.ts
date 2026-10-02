@@ -245,6 +245,11 @@ const subCliCommandDescriptors = [
     machineOutput: ({ argv }) => isSkillsMachineOutput(argv),
   },
   {
+    name: "ollama",
+    description: "Manage Ollama models directly via API",
+    hasSubcommands: true,
+  },
+  {
     name: "update",
     description: "Update OpenClaw and inspect update channel status",
     hasSubcommands: true,

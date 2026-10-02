@@ -74,6 +74,7 @@ class ConnectionManager internal constructor(
 
       if (isManual) {
         // Manual remote hosts default to TLS; only local manual hosts may honor the cleartext toggle.
+        // Tailnet (100.64/10, *.ts.net) and single-label LAN names count as local in GatewayHostSecurity.
         if (!manualTlsEnabled && cleartextAllowedHost) return null
       } else {
         val hinted = endpoint.tlsEnabled || !endpoint.tlsFingerprintSha256.isNullOrBlank()
@@ -132,13 +133,13 @@ class ConnectionManager internal constructor(
   ): GatewayClientInfo =
     GatewayClientInfo(
       id = clientId,
-      displayName = prefs.displayName.value,
+      displayName = prefs.displayName.value.takeIf { it.isNotBlank() },
       version = resolvedVersionName(),
       platform = "android",
       mode = clientMode,
-      instanceId = prefs.instanceId.value,
+      instanceId = prefs.instanceId.value.takeIf { it.isNotBlank() },
       deviceFamily = "Android",
-      modelIdentifier = resolveModelIdentifier(),
+      modelIdentifier = resolveModelIdentifier()?.takeIf { it.isNotBlank() },
     )
 
   /** Connect options for the Android node session that exposes phone capabilities. */

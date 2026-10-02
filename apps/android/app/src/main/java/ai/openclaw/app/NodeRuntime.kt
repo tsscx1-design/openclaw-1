@@ -3067,6 +3067,7 @@ class NodeRuntime private constructor(
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = chat.modelCatalog
   val chatPendingSessionSettingsKeys: StateFlow<Set<String>> = chat.pendingSessionSettingsKeys
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
+  val chatStreamingThinkingText: StateFlow<String?> = chat.streamingThinkingText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
   val chatSubagentActivities: StateFlow<Map<String, ai.openclaw.app.chat.ChatSubagentActivity>> = chat.subagentActivities
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = chat.questions
@@ -5788,6 +5789,11 @@ class NodeRuntime private constructor(
     synchronized(gatewayDataScopeLock) {
       connectedEndpoint?.stableId?.let { GatewayDataScope(it, gatewayDataGeneration) }
     }
+
+  suspend fun runGatewayRpc(method: GatewayMethod, paramsJson: String? = null, timeoutMs: Long = 15_000): String {
+    val gatewayScope = captureGatewayDataScope() ?: throw IllegalStateException("Gateway not connected")
+    return requestGatewayData(gatewayScope, method.rawValue, paramsJson, timeoutMs)
+  }
 
   private suspend fun requestGatewayData(
     gatewayScope: GatewayDataScope,

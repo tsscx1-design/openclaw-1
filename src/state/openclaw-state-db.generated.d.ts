@@ -84,6 +84,13 @@ export interface AgentProvenance {
   creator_agent_id: string | null;
 }
 
+export interface AgentSouls {
+  created_at_ms: number;
+  name: string;
+  prompt_text: string;
+  soul_id: string;
+}
+
 export interface ApnsRegistrationTombstones {
   deleted_at_ms: number;
   node_id: string;
@@ -1694,6 +1701,7 @@ export interface DB {
   agent_databases: AgentDatabases;
   agent_deletion_journal: AgentDeletionJournal;
   agent_provenance: AgentProvenance;
+  agent_souls: AgentSouls;
   apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;
   audit_events: AuditEvents;

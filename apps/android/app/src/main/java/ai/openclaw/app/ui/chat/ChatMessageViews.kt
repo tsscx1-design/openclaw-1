@@ -247,6 +247,7 @@ fun ChatTypingIndicatorBubble(
   runKey: String,
   observedAtElapsedMs: Long,
   outputTokens: Long? = null,
+  thinkingPreview: String? = null,
 ) {
   val elapsedMs = rememberWorkingElapsedMs(observedAtElapsedMs)
   val phrase = workingPhraseText(seed = runKey, elapsedMs = elapsedMs)
@@ -272,6 +273,16 @@ fun ChatTypingIndicatorBubble(
         }
         phrase?.let { Text(nativeStringResource("· \$phrase", it), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) }
       }
+    }
+    thinkingPreview?.let {
+      Text(
+        text = it,
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+        maxLines = 4,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(top = 6.dp),
+      )
     }
   }
 }

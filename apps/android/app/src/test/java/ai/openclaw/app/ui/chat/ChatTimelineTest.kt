@@ -16,6 +16,19 @@ import org.junit.Test
 
 class ChatTimelineTest {
   @Test
+  fun thinkingPreviewShowsBoundedTailOnlyUntilAnswerStreams() {
+    assertEquals("plan", thinkingPreviewTail("  plan \n\n", streamingAssistantText = null))
+    assertEquals(
+      "…3\n4\n5\n6",
+      thinkingPreviewTail("1\n2\n3\n4\n5\n6", streamingAssistantText = null),
+    )
+    val long = "a".repeat(500)
+    assertEquals("…" + "a".repeat(280), thinkingPreviewTail(long, streamingAssistantText = null))
+    assertEquals(null, thinkingPreviewTail("plan", streamingAssistantText = "Answer"))
+    assertEquals(null, thinkingPreviewTail("  ", streamingAssistantText = null))
+  }
+
+  @Test
   fun activeRunAnchorsNewestUserPromptInsteadOfThinkingRow() {
     val user = textMessage(id = "user-1", role = "user", text = "hello")
 

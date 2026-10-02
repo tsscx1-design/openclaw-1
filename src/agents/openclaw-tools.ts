@@ -67,6 +67,7 @@ import { createMobileUiTool } from "./tools/mobile-ui-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createOpenClawDelegateToolsForRun } from "./tools/openclaw-delegate-tool.js";
+import { createPartnerCreateTool } from "./tools/partner-create-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
 import { createPortalTool } from "./tools/portal-tool.js";
 import { createProgressCardTool } from "./tools/progress-card-tool.js";
@@ -81,6 +82,7 @@ import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsTool } from "./tools/sessions-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
+import { createSpecialistTaskTool } from "./tools/specialist-task-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTerminalTool } from "./tools/terminal-tool.js";
@@ -344,6 +346,20 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
   const tools: AnyAgentTool[] = [
+    createSpecialistTaskTool({
+      agentSessionKey: sessionKey,
+      agentId: sessionAgentId,
+      sessionId: options?.sessionId,
+      webSearchTool,
+      webFetchTool,
+    }),
+    createPartnerCreateTool({
+      agentSessionKey: sessionKey,
+      agentId: sessionAgentId,
+      sessionId: options?.sessionId,
+      webSearchTool,
+      webFetchTool,
+    }),
     createDashboardTool({
       agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
       agentId: sessionAgentId,

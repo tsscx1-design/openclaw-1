@@ -107,6 +107,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -139,6 +140,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -154,6 +156,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -177,6 +180,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.text.DateFormat
 import java.util.Date
+import kotlinx.coroutines.launch
 
 /**
  * Dispatches a selected settings route to its detail screen without changing navigation ownership.
@@ -186,13 +190,23 @@ internal fun SettingsDetailScreen(
   viewModel: MainViewModel,
   route: SettingsRoute,
   onBack: () -> Unit,
+  onOpenSettingsRoute: (SettingsRoute) -> Unit = {},
 ) {
   when (route) {
     SettingsRoute.Home -> Unit
     SettingsRoute.Profile -> ProfileSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Voice -> VoiceSettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.Agents -> AgentsSettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.ProvidersModels -> ProvidersModelsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Agents -> AgentsSettingsScreen(
+      viewModel = viewModel,
+      onBack = onBack,
+      onOpenPartnerManagement = { onOpenSettingsRoute(SettingsRoute.PartnerManagement) },
+      onOpenCoreAgentSettings = { onOpenSettingsRoute(SettingsRoute.CoreAgentSettings) },
+    )
+    SettingsRoute.ProvidersModels -> ProvidersModelsScreen(
+      viewModel = viewModel,
+      onBack = onBack,
+      onOpenOllamaCatalog = { onOpenSettingsRoute(SettingsRoute.OllamaCatalog) }
+    )
     SettingsRoute.Approvals -> ApprovalsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.CronJobs -> CronJobsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Usage -> UsageSettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -207,10 +221,101 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Notifications -> NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.PhoneCapabilities -> PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Gateway -> GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.GatewayConfig -> GatewayConfigScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Appearance -> AppearanceSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Health -> HealthLogsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.About -> AboutSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Licenses -> LicensesSettingsScreen(onBack = onBack)
+    SettingsRoute.OllamaCatalog -> OllamaCatalogScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.PartnerManagement -> PartnerManagementScreen(
+      viewModel = viewModel,
+      onBack = onBack,
+      onStartGroupChat = {
+        onOpenSettingsRoute(SettingsRoute.GroupChat)
+      },
+      onOpenPartnerChat = { partnerId ->
+        viewModel.selectPartnerForChat(partnerId)
+        onOpenSettingsRoute(SettingsRoute.PartnerChat)
+      },
+      onOpenCharacterSheet = { partnerId ->
+        viewModel.selectPartnerForChat(partnerId)
+        onOpenSettingsRoute(SettingsRoute.PartnerCharacterSheet)
+      }
+    )
+    SettingsRoute.PartnerChat -> PartnerChatScreen(
+      viewModel = viewModel,
+      onBack = onBack,
+      onOpenMemoryInspector = {
+        onOpenSettingsRoute(SettingsRoute.MemoryInspector)
+      },
+      onOpenCharacterSheet = {
+        onOpenSettingsRoute(SettingsRoute.PartnerCharacterSheet)
+      },
+      onOpenMemory = { onOpenSettingsRoute(SettingsRoute.PartnerMemory) },
+      onOpenBond = { onOpenSettingsRoute(SettingsRoute.PartnerBond) },
+      onOpenDailySettings = { onOpenSettingsRoute(SettingsRoute.DailySettings) },
+      onOpenMiniGame = { onOpenSettingsRoute(SettingsRoute.MiniGame) },
+      onOpenDream = { onOpenSettingsRoute(SettingsRoute.PartnerDream) },
+      onOpenMood = { onOpenSettingsRoute(SettingsRoute.MoodDashboard) },
+      onOpenDiary = { onOpenSettingsRoute(SettingsRoute.Diary) },
+    )
+    SettingsRoute.PartnerCharacterSheet -> PartnerCharacterSheetScreen(
+      viewModel = viewModel,
+      partnerId = rememberSettingsPartnerId(viewModel),
+      onBack = onBack,
+    )
+    SettingsRoute.GroupChat -> GroupChatScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.MemoryInspector -> MemoryInspectorScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.FeatureSettings -> FeatureSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.BackupRestore -> BackupRestoreScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.SpecialistJobs -> SpecialistJobsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.PcHealth -> PcHealthScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.VoiceStudio -> VoiceStudioScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.CoreAgentSettings -> CoreAgentSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.PartnerMemory -> PartnerMemoryScreen(
+      viewModel = viewModel,
+      partnerId = rememberSettingsPartnerId(viewModel),
+      onBack = onBack,
+    )
+    SettingsRoute.PartnerBond -> PartnerBondScreen(
+      viewModel = viewModel,
+      partnerId = rememberSettingsPartnerId(viewModel),
+      onBack = onBack,
+    )
+    SettingsRoute.DailySettings -> DailySettingsScreen(
+      viewModel = viewModel,
+      partnerId = rememberSettingsPartnerId(viewModel),
+      onBack = onBack,
+    )
+    SettingsRoute.MiniGame -> MiniGameScreen(
+      viewModel = viewModel,
+      partnerId = rememberSettingsPartnerId(viewModel),
+      onBack = onBack,
+    )
+    SettingsRoute.PartnerDream -> PartnerDreamScreen(
+      viewModel = viewModel,
+      partnerId = rememberSettingsPartnerId(viewModel),
+      onBack = onBack,
+    )
+    SettingsRoute.MoodDashboard -> MoodDashboardScreen(
+      viewModel = viewModel,
+      partnerId = rememberSettingsPartnerId(viewModel),
+      onBack = onBack,
+    )
+    SettingsRoute.Diary -> DiaryScreen(
+      viewModel = viewModel,
+      partnerId = rememberSettingsPartnerId(viewModel),
+      onBack = onBack,
+    )
+    SettingsRoute.AvatarCustomize -> AvatarCustomizeScreen(
+      viewModel = viewModel,
+      partnerId = rememberSettingsPartnerId(viewModel),
+      onBack = onBack,
+    )
+    SettingsRoute.OnDeviceGguf -> OnDeviceGgufScreen(
+      viewModel = viewModel,
+      onBack = onBack,
+    )
   }
 }
 
@@ -548,10 +653,23 @@ internal fun cronDetailDisposalClearsTransientState(isChangingConfigurations: Bo
 private fun AgentsSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
+  onOpenPartnerManagement: () -> Unit = {},
+  onOpenCoreAgentSettings: () -> Unit = {},
 ) {
   val agents by viewModel.gatewayAgents.collectAsState()
   val defaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
+  val scope = rememberCoroutineScope()
+
+  var showCreateDialog by remember { mutableStateOf(false) }
+  var newAgentName by remember { mutableStateOf("") }
+  var newAgentModel by remember { mutableStateOf("") }
+  var newAgentEmoji by remember { mutableStateOf("🤖") }
+  var isCreating by remember { mutableStateOf(false) }
+  var createError by remember { mutableStateOf<String?>(null) }
+
+  var agentToDelete by remember { mutableStateOf<GatewayAgentSummary?>(null) }
+  var isDeleting by remember { mutableStateOf(false) }
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -559,14 +677,183 @@ private fun AgentsSettingsScreen(
     }
   }
 
-  SettingsDetailFrame(title = nativeString("Agents"), subtitle = nativeString("Choose and inspect the assistants available on this gateway."), icon = Icons.Default.Person, onBack = onBack) {
-    SettingsMetricPanel(
-      rows =
-        listOf(
-          SettingsMetric(nativeString("Available"), agents.size.toString()),
-          SettingsMetric(nativeString("Default"), defaultAgentName(agents, defaultAgentId)),
-        ),
+  // 新規エージェント作成ダイアログ
+  if (showCreateDialog) {
+    AlertDialog(
+      onDismissRequest = { if (!isCreating) showCreateDialog = false },
+      title = { Text(text = "新規エージェント作成", style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Text(
+            text = "システム操作・コマンド実行等を担当するコアエージェントを追加します。",
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted
+          )
+          ClawTextField(
+            value = newAgentName,
+            onValueChange = { newAgentName = it },
+            placeholder = "エージェント名 (例: Coding Assistant)",
+            modifier = Modifier.fillMaxWidth(),
+          )
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ClawTextField(
+              value = newAgentEmoji,
+              onValueChange = { newAgentEmoji = it },
+              placeholder = "絵文字 (例: 🤖)",
+              modifier = Modifier.width(80.dp),
+            )
+            ClawTextField(
+              value = newAgentModel,
+              onValueChange = { newAgentModel = it },
+              placeholder = "モデル (任意, 例: qwen2.5:latest)",
+              modifier = Modifier.weight(1f),
+            )
+          }
+          val modelPresets = listOf(
+            "ternary-bonsai-2-27b" to "Ternary PQ2",
+            "ternary-bonsai-ptq1" to "Ternary PTQ1",
+            "bonsai-crack" to "Crack PQ2",
+            "swift-bonsai-pq2" to "Swift PQ2",
+            "swift-bonsai-ptq1" to "Swift PTQ1",
+            "ptq1" to "PTQ1",
+            "ptq2" to "PTQ2"
+          )
+          androidx.compose.foundation.lazy.LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+          ) {
+            items(modelPresets.size) { index ->
+              val id = modelPresets[index].first
+              val label = modelPresets[index].second
+              Box(
+                modifier = Modifier
+                  .clip(RoundedCornerShape(6.dp))
+                  .background(
+                    if (newAgentModel == id) ClawTheme.colors.primary.copy(alpha = 0.28f)
+                    else ClawTheme.colors.surfaceRaised
+                  )
+                  .clickable { newAgentModel = id }
+                  .padding(horizontal = 8.dp, vertical = 4.dp),
+                contentAlignment = Alignment.Center
+              ) {
+                Text(text = label, style = ClawTheme.type.caption.copy(fontSize = androidx.compose.ui.unit.TextUnit(11f, androidx.compose.ui.unit.TextUnitType.Sp)), color = ClawTheme.colors.text)
+              }
+            }
+          }
+          createError?.let {
+            Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
+          }
+        }
+      },
+      confirmButton = {
+        ClawPrimaryButton(
+          text = if (isCreating) "作成中..." else "作成",
+          enabled = newAgentName.isNotBlank() && !isCreating,
+          onClick = {
+            scope.launch {
+              isCreating = true
+              createError = null
+              val ok = viewModel.createAgent(
+                name = newAgentName.trim(),
+                model = newAgentModel.trim().takeIf { it.isNotBlank() },
+                emoji = newAgentEmoji.trim().takeIf { it.isNotBlank() }
+              )
+              isCreating = false
+              if (ok) {
+                showCreateDialog = false
+                newAgentName = ""
+                newAgentModel = ""
+                newAgentEmoji = "🤖"
+              } else {
+                createError = "エージェントの作成に失敗しました。"
+              }
+            }
+          }
+        )
+      },
+      dismissButton = {
+        ClawSecondaryButton(
+          text = "キャンセル",
+          enabled = !isCreating,
+          onClick = { showCreateDialog = false }
+        )
+      }
     )
+  }
+
+  // 削除確認ダイアログ
+  agentToDelete?.let { target ->
+    AlertDialog(
+      onDismissRequest = { if (!isDeleting) agentToDelete = null },
+      title = { Text(text = "エージェントの削除", style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+      text = {
+        Text(
+          text = "エージェント「${target.name ?: target.id}」を削除しますか？\nワークスペースと設定ファイルがクリーンアップされます。",
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.text
+        )
+      },
+      confirmButton = {
+        ClawPrimaryButton(
+          text = if (isDeleting) "削除中..." else "削除する",
+          enabled = !isDeleting,
+          onClick = {
+            scope.launch {
+              isDeleting = true
+              viewModel.deleteAgent(target.id)
+              isDeleting = false
+              agentToDelete = null
+            }
+          }
+        )
+      },
+      dismissButton = {
+        ClawSecondaryButton(
+          text = "キャンセル",
+          enabled = !isDeleting,
+          onClick = { agentToDelete = null }
+        )
+      }
+    )
+  }
+
+  SettingsDetailFrame(
+    title = nativeString("Agents"),
+    subtitle = nativeString("Choose and inspect the assistants available on this gateway."),
+    icon = Icons.Default.Person,
+    onBack = onBack
+  ) {
+    SettingsMetricPanel(
+      rows = listOf(
+        SettingsMetric(nativeString("Available"), agents.size.toString()),
+        SettingsMetric(nativeString("Default"), defaultAgentName(agents, defaultAgentId)),
+      ),
+    )
+
+    // コアエージェント設定ボタン
+    ClawPrimaryButton(
+      text = "コアエージェント設定 (人格・口調・SOUL)",
+      onClick = onOpenCoreAgentSettings,
+      modifier = Modifier.fillMaxWidth(),
+      icon = Icons.Default.Person,
+    )
+
+    // 新規エージェント作成ボタン
+    ClawSecondaryButton(
+      text = "＋ 新規エージェント作成",
+      onClick = { showCreateDialog = true },
+      modifier = Modifier.fillMaxWidth(),
+      icon = Icons.Default.Add,
+    )
+
+    // AIパートナー設定ボタン
+    ClawSecondaryButton(
+      text = "AIパートナー作成・ペルソナ詳細設定",
+      onClick = onOpenPartnerManagement,
+      modifier = Modifier.fillMaxWidth(),
+      icon = Icons.Default.Person,
+    )
+
     when {
       !isConnected -> {
         ClawPanel {
@@ -581,7 +868,12 @@ private fun AgentsSettingsScreen(
       }
 
       else -> {
-        AgentsPanel(agents = agents, defaultAgentId = defaultAgentId)
+        AgentsPanel(
+          agents = agents,
+          defaultAgentId = defaultAgentId,
+          onConfigureAgent = { onOpenCoreAgentSettings() },
+          onDeleteAgent = { agentToDelete = it },
+        )
       }
     }
   }
@@ -2946,9 +3238,16 @@ private fun CronJobTextPanel(
 private fun AgentsPanel(
   agents: List<GatewayAgentSummary>,
   defaultAgentId: String?,
+  onConfigureAgent: (GatewayAgentSummary) -> Unit = {},
+  onDeleteAgent: (GatewayAgentSummary) -> Unit = {},
 ) {
   ClawListPanel(items = agents) { agent ->
-    AgentListRow(agent = agent, isDefault = agent.id == defaultAgentId)
+    AgentListRow(
+      agent = agent,
+      isDefault = agent.id == defaultAgentId,
+      onConfigure = { onConfigureAgent(agent) },
+      onDelete = { onDeleteAgent(agent) },
+    )
   }
 }
 
@@ -2956,6 +3255,8 @@ private fun AgentsPanel(
 private fun AgentListRow(
   agent: GatewayAgentSummary,
   isDefault: Boolean,
+  onConfigure: () -> Unit = {},
+  onDelete: () -> Unit = {},
 ) {
   ClawListItem(
     title = agent.name?.takeIf { it.isNotBlank() } ?: agent.id,
@@ -2965,7 +3266,28 @@ private fun AgentListRow(
         ClawTextBadge(text = agentBadge(agent))
       }
     },
-    trailing = { ClawStatusPill(text = if (isDefault) nativeString("Default") else nativeString("Ready"), status = ClawStatus.Success) },
+    trailing = {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+      ) {
+        if (isDefault) {
+          ClawStatusPill(text = nativeString("Default"), status = ClawStatus.Success)
+        }
+        ClawPlainIconButton(
+          icon = Icons.Default.Tune,
+          contentDescription = "設定",
+          onClick = onConfigure,
+        )
+        if (agent.id != "main" && !isDefault) {
+          ClawPlainIconButton(
+            icon = Icons.Default.Delete,
+            contentDescription = "削除",
+            onClick = onDelete,
+          )
+        }
+      }
+    },
   )
 }
 
@@ -3415,4 +3737,30 @@ private fun openAppPermissionSettings(context: Context) {
       Uri.fromParts("package", context.packageName, null),
     ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
   context.startActivity(intent)
+}
+
+/**
+ * Partner screens opened from Settings need a partner even when none was picked in a chat:
+ * use the main-chat partner, else the first partner, and remember it as the active one.
+ */
+@androidx.compose.runtime.Composable
+internal fun rememberSettingsPartnerId(viewModel: ai.openclaw.app.MainViewModel): String {
+  val active = viewModel.activePartnerId.collectAsState().value
+  androidx.compose.runtime.LaunchedEffect(active) {
+    if (!active.isNullOrBlank()) return@LaunchedEffect
+    val fallback =
+      runCatching {
+        val main =
+          org.json.JSONObject(viewModel.runGatewayRpc(ai.openclaw.app.gateway.GatewayMethod.PartnerMainGet, "{}"))
+            .optString("partnerId")
+        main.takeIf { it.isNotBlank() && it != "null" }
+          ?: org.json.JSONObject(viewModel.runGatewayRpc(ai.openclaw.app.gateway.GatewayMethod.PartnerList, "{}"))
+            .optJSONArray("partners")
+            ?.optJSONObject(0)
+            ?.optString("id")
+            .orEmpty()
+      }.getOrDefault("")
+    if (fallback.isNotBlank()) viewModel.selectPartnerForChat(fallback)
+  }
+  return active.orEmpty()
 }

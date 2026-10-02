@@ -619,6 +619,7 @@ export const ModelsConfigSchema = z
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: ModelProvidersSchema.optional(),
     catalogRefresh: ModelCatalogRefreshConfigSchema,
+    taskModels: z.record(z.string(), z.string()).optional(),
   })
   .strict()
   .optional();

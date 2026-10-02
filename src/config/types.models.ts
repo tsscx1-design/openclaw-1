@@ -242,6 +242,8 @@ export type ModelsConfig = {
   providers?: Record<string, ModelProviderConfig>;
   /** Hosted model catalog refresh settings. */
   catalogRefresh?: ModelCatalogRefreshConfig;
+  /** Map of task identifiers to specific model references (e.g. { fast: "ollama/llama3" }) */
+  taskModels?: Record<string, string>;
 };
 
 /** Top-level models config input before provider entries are normalized. */

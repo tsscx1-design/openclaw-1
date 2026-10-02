@@ -703,7 +703,7 @@ class ChatControllerModelSelectionTest {
       assertEquals("off", (sentParams["thinking"] as JsonPrimitive).content)
       assertEquals("synthetic/plain-next", controller.selectedModelRef.value)
       assertEquals(
-        listOf("off"),
+        listOf("off", "low", "medium", "high"),
         controller.thinkingLevelSelection.value.options
           .map { it.id },
       )
@@ -763,10 +763,10 @@ class ChatControllerModelSelectionTest {
       assertTrue(patch.await())
       assertTrue(send.await())
       val sentParams = json.parseToJsonElement(requests.single { it.first == "chat.send" }.second.orEmpty()) as JsonObject
-      assertEquals("off", (sentParams["thinking"] as JsonPrimitive).content)
+      assertEquals("high", (sentParams["thinking"] as JsonPrimitive).content)
       assertEquals("synthetic/plain", controller.selectedModelRef.value)
       assertEquals(
-        listOf("off"),
+        listOf("off", "low", "medium", "high"),
         controller.thinkingLevelSelection.value.options
           .map { it.id },
       )
@@ -854,7 +854,7 @@ class ChatControllerModelSelectionTest {
       assertTrue(send.await())
       assertEquals("synthetic/plain", controller.selectedModelRef.value)
       assertEquals(
-        listOf("off"),
+        listOf("off", "low", "medium", "high"),
         controller.thinkingLevelSelection.value.options
           .map { it.id },
       )
@@ -987,7 +987,7 @@ class ChatControllerModelSelectionTest {
       assertTrue(controller.sendMessageAwaitAcceptance("keep this draft", "high", emptyList()))
       runCurrent()
       val sentParams = json.parseToJsonElement(requests.single { it.first == "chat.send" }.second.orEmpty()) as JsonObject
-      assertEquals("off", (sentParams["thinking"] as JsonPrimitive).content)
+      assertEquals("high", (sentParams["thinking"] as JsonPrimitive).content)
       val historyLimits =
         requests
           .filter { it.first == "chat.history" }
@@ -1119,12 +1119,12 @@ class ChatControllerModelSelectionTest {
       controller.onGatewayScopeChanging()
       controller.refreshSessions()
       advanceUntilIdle()
-      assertEquals("off", controller.thinkingLevel.value)
+      assertEquals("medium", controller.thinkingLevel.value)
 
       controller.setThinkingLevel("high")
       advanceUntilIdle()
 
-      assertEquals("off", controller.thinkingLevel.value)
+      assertEquals("medium", controller.thinkingLevel.value)
       assertEquals("thinking rejected", controller.errorText.value)
     }
 

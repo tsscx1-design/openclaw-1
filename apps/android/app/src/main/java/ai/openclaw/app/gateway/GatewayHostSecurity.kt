@@ -65,6 +65,8 @@ internal fun isLocalCleartextGatewayHost(
   if (host.isEmpty()) return false
   if (isLoopbackGatewayHost(host, allowEmulatorBridgeAlias = allowEmulatorBridgeAlias)) return true
   if (isMdnsLocalHostname(host)) return true
+  if (isTailnetHostname(host)) return true
+  if (isSingleLabelHostname(host)) return true
 
   val zoneIndex = host.indexOf('%')
   if (zoneIndex >= 0) {
@@ -82,6 +84,7 @@ internal fun isLocalCleartextGatewayHost(
       first == 172 && second in 16..31 -> true
       first == 192 && second == 168 -> true
       first == 169 && second == 254 -> true
+      first == 100 && second in 64..127 -> true
       else -> false
     }
   }
@@ -152,3 +155,16 @@ private fun isDnsHostnameLabel(label: String): Boolean {
 
 /** Cheap prefilter before handing potential IPv6 literals to InetAddress. */
 private fun isIpv6LiteralChar(char: Char): Boolean = char in '0'..'9' || char in 'a'..'f' || char == ':' || char == '.'
+
+private fun isTailnetHostname(host: String): Boolean {
+  if (host.length > 253) return false
+  if (!host.endsWith(".ts.net")) return false
+  val labels = host.split('.')
+  if (labels.size < 3 || labels.takeLast(2) != listOf("ts", "net")) return false
+  return labels.dropLast(2).all(::isDnsHostnameLabel)
+}
+
+private fun isSingleLabelHostname(host: String): Boolean {
+  if (host.contains('.') || host.contains(':')) return false
+  return isDnsHostnameLabel(host)
+}

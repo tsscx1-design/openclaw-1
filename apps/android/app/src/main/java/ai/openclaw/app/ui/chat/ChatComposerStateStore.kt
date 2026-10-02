@@ -103,7 +103,7 @@ internal class ChatComposerStateStore(
 
   fun beginSend(owner: ChatComposerOwner): ChatComposerSendStart =
     synchronized(lock) {
-      if (hasSendGateLocked(owner)) {
+      if (isSendQueueFullLocked(owner)) {
         return@synchronized ChatComposerSendStart(ChatComposerSendStartResult.Unavailable)
       }
       val inputSnapshot = textDrafts[owner]
@@ -118,8 +118,11 @@ internal class ChatComposerStateStore(
       if (!textDrafts.beginAdmission(commandId, owner, inputSnapshot)) {
         return@synchronized ChatComposerSendStart(ChatComposerSendStartResult.CheckpointFull)
       }
+      val current = sendStatesState.value[owner]
+      val nextOps = (current?.activeOperationIds.orEmpty()) + commandId
+      val nextPending = current?.pendingAdmissionIds.orEmpty()
       sendStatesState.value =
-        sendStatesState.value + (owner to ChatComposerSendState(activeOperationIds = setOf(commandId)))
+        sendStatesState.value + (owner to ChatComposerSendState(activeOperationIds = nextOps, pendingAdmissionIds = nextPending))
       ChatComposerSendStart(
         result = ChatComposerSendStartResult.Started,
         request = ChatComposerSendRequest(commandId, owner, inputSnapshot, inputSnapshot.trim(), attachments),
@@ -340,6 +343,9 @@ internal class ChatComposerStateStore(
       attachmentNoticesState.value = attachmentNoticesState.value.filterKeys { !matches(it) }
     }
   }
+
+  private fun isSendQueueFullLocked(owner: ChatComposerOwner): Boolean =
+    (sendStatesState.value[owner]?.activeOperationIds?.size ?: 0) >= 16
 
   private fun hasSendGateLocked(owner: ChatComposerOwner): Boolean = owner in sendStatesState.value
 

@@ -37,6 +37,8 @@ internal data class GatewaySetupCode(
   val bootstrapToken: String?,
   val token: String?,
   val password: String?,
+  /** Pre-pinned TLS fingerprint embedded in the setup code; skips the manual-entry dialog. */
+  val tlsFingerprintSha256: String? = null,
 )
 
 /** Final gateway connection fields selected from setup-code or manual UI input. */
@@ -48,6 +50,8 @@ internal data class GatewayConnectConfig(
   val token: String,
   val password: String,
   val contextPath: String = "",
+  /** Pre-pinned TLS fingerprint from setup code; non-null skips the manual trust dialog. */
+  val tlsFingerprintSha256: String? = null,
 )
 
 /** How a connection attempt may update credentials already owned by the runtime. */
@@ -143,6 +147,7 @@ internal fun resolveGatewayConnectConfig(
       bootstrapToken = setupBootstrapToken,
       token = sharedToken,
       password = sharedPassword,
+      tlsFingerprintSha256 = setup.tlsFingerprintSha256?.trim()?.takeIf { it.isNotBlank() },
     )
   }
 
@@ -303,7 +308,14 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
     val bootstrapToken = jsonField(obj, "bootstrapToken")
     val token = jsonField(obj, "token")
     val password = jsonField(obj, "password")
-    GatewaySetupCode(url = url, bootstrapToken = bootstrapToken, token = token, password = password)
+    val tlsFingerprintSha256 = jsonField(obj, "tlsFingerprintSha256")
+    GatewaySetupCode(
+      url = url,
+      bootstrapToken = bootstrapToken,
+      token = token,
+      password = password,
+      tlsFingerprintSha256 = tlsFingerprintSha256,
+    )
   } catch (_: IllegalArgumentException) {
     null
   }

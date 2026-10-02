@@ -17,6 +17,7 @@ import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.currentAppLanguage
 import ai.openclaw.app.firstGraphemeOrNull
+import ai.openclaw.app.gateway.GatewayMethod
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeString
@@ -37,14 +38,28 @@ import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawSeparatedColumn
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawTheme
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.border
 import ai.openclaw.app.ui.design.OpenClawMascot
+import ai.openclaw.app.ui.design.PartnerAvatar
 import ai.openclaw.app.ui.design.agentAvatarSource
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.items
+import org.json.JSONArray
+import org.json.JSONObject
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -60,12 +75,14 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.GraphicEq
@@ -98,8 +115,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -145,6 +165,7 @@ fun ShellScreen(
   OpenClawSystemBarAppearance(lightAppearance = !shellDark)
   ClawDesignTheme(dark = shellDark, family = appearanceThemeFamily, accentArgb = appearanceAccentArgb ?: gatewayAccentArgb) {
     val nav = rememberSaveable(saver = ShellNavigation.Saver) { ShellNavigation() }
+    val settingsListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     var commandOpen by rememberSaveable { mutableStateOf(false) }
     var conversationScreenWasActive by rememberSaveable { mutableStateOf(false) }
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
@@ -246,12 +267,21 @@ fun ShellScreen(
         closeSidebar()
       }
 
-      Box(modifier = Modifier.fillMaxSize().background(ClawTheme.colors.canvas)) {
+      AdaptiveShellScaffold(
+        nav = nav,
+        hasBookPanes = bookPanes != null,
+        modifier = Modifier.fillMaxSize().background(ClawTheme.colors.canvas),
+      ) { isCompact ->
+        // Compact (スマホ) ではボトムバーがナビゲーションを担うため、
+        // サイドバーのハンバーガーボタンとスワイプジェスチャーを無効化する
+        val showSidebarButton = !permanentSidebar && !isCompact
+        val sidebarGesturesEnabled = !sidebarRowDragging && !isCompact
+
         SidebarNavigationShell(
           drawerState = sidebarDrawerState,
           bookPanes = bookPanes,
           sidebarBand = foldBounds.sidebarBand,
-          gesturesEnabled = !sidebarRowDragging,
+          gesturesEnabled = sidebarGesturesEnabled,
           drawerContent = {
             OpenClawSidebar(
               viewModel = viewModel,
@@ -304,7 +334,7 @@ fun ShellScreen(
             Tab.Overview -> {
               OverviewScreen(
                 viewModel = viewModel,
-                showSidebarButton = !permanentSidebar,
+                showSidebarButton = showSidebarButton,
                 onOpenSidebar = openSidebar,
                 onSelectTab = nav::selectTab,
                 onOpenSettingsRoute = nav::openSettingsRoute,
@@ -317,7 +347,7 @@ fun ShellScreen(
                 viewModel = viewModel,
                 tabletopPanes = foldBounds.tabletop,
                 features = features,
-                showSidebarButton = !permanentSidebar,
+                showSidebarButton = showSidebarButton,
                 onOpenSidebar = openSidebar,
                 onOpenDashboard = nav::openSessionDashboard,
                 onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
@@ -335,7 +365,7 @@ fun ShellScreen(
             Tab.Sessions -> {
               SessionsScreen(
                 viewModel = viewModel,
-                showSidebarButton = !permanentSidebar,
+                showSidebarButton = showSidebarButton,
                 onOpenSidebar = openSidebar,
                 onOpenChat = { nav.selectTab(Tab.Chat) },
               )
@@ -360,11 +390,12 @@ fun ShellScreen(
               SettingsShellScreen(
                 viewModel = viewModel,
                 route = nav.settingsRoute,
-                showSidebarButton = !permanentSidebar,
+                showSidebarButton = showSidebarButton,
                 onOpenSidebar = openSidebar,
                 onRouteChange = nav::openSettingsRouteFromHome,
                 onBack = nav::back,
                 onOpenCommand = { commandOpen = true },
+                settingsListState = settingsListState,
               )
             }
           }
@@ -465,7 +496,8 @@ private fun OverviewScreen(
     } else {
       attentionRows
     }
-  val headerState = overviewHeaderState(isConnected = isConnected, hasAttention = attentionRows.isNotEmpty())
+  val isLocalLlm by viewModel.isOnDeviceLlmActive.collectAsState()
+  val headerState = overviewHeaderState(isConnected = isConnected, hasAttention = attentionRows.isNotEmpty(), isLocalLlm = isLocalLlm)
   val headerRoute = overviewHeaderRoute(attentionRows)
   val activeAgentName = overviewAgentName(agents = agents, defaultAgentId = defaultAgentId)
   val activeAgentBadge = overviewAgentBadgeText(agents = agents, defaultAgentId = defaultAgentId)
@@ -529,6 +561,30 @@ private fun OverviewScreen(
             text = nativeString("Overview"),
             style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp),
             color = ClawTheme.colors.text,
+          )
+        }
+
+        item {
+          PcHealthCard(viewModel = viewModel, onOpen = { onOpenSettingsRoute(SettingsRoute.PcHealth) })
+        }
+
+        item {
+          QuickPartnerChatPanel(
+            viewModel = viewModel,
+            onOpenPartnerChat = { partnerId ->
+              viewModel.selectPartnerForChat(partnerId)
+              onOpenSettingsRoute(SettingsRoute.PartnerChat)
+            },
+            onOpenPartnerManagement = {
+              onOpenSettingsRoute(SettingsRoute.PartnerManagement)
+            },
+          )
+        }
+
+        item {
+          OverviewModelEngineControlPanel(
+            viewModel = viewModel,
+            onOpenChat = { onSelectTab(Tab.Chat) },
           )
         }
 
@@ -981,8 +1037,10 @@ internal data class OverviewHeaderState(
 internal fun overviewHeaderState(
   isConnected: Boolean,
   hasAttention: Boolean,
+  isLocalLlm: Boolean = false,
 ): OverviewHeaderState =
   when {
+    isLocalLlm -> OverviewHeaderState("ローカル", ClawStatus.Success)
     !isConnected -> OverviewHeaderState("Offline", ClawStatus.Neutral)
     hasAttention -> OverviewHeaderState("Needs attention", ClawStatus.Warning)
     else -> OverviewHeaderState("Online", ClawStatus.Success)
@@ -1483,6 +1541,7 @@ private fun SettingsShellScreen(
   onRouteChange: (SettingsRoute) -> Unit,
   onBack: () -> Unit,
   onOpenCommand: () -> Unit,
+  settingsListState: LazyListState,
 ) {
   val displayName by viewModel.displayName.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
@@ -1533,17 +1592,20 @@ private fun SettingsShellScreen(
   // System Back for settings routes is owned by the shell-level BackHandler, which
   // unwinds cross-tab opens to their originating tab via ShellNavigation. A local
   // BackHandler here would shadow it and strand cross-tab opens on Settings Home.
-  if (route != SettingsRoute.Home) {
-    SettingsDetailScreen(viewModel = viewModel, route = route, onBack = onBack)
-    return
-  }
   val appLanguage = currentAppLanguage()
 
+  @Composable
+  fun SettingsHomeList(selectedRoute: SettingsRoute?) {
   ClawScaffold(
     contentPadding = PaddingValues(start = 16.dp, top = 10.dp, end = 16.dp, bottom = 4.dp),
     contentWindowInsets = shellContentInsets,
   ) {
-    LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(9.dp), contentPadding = PaddingValues(bottom = 4.dp)) {
+    LazyColumn(
+      state = settingsListState,
+      modifier = Modifier.fillMaxSize(),
+      verticalArrangement = Arrangement.spacedBy(9.dp),
+      contentPadding = PaddingValues(bottom = 4.dp),
+    ) {
       item {
         Row(
           modifier = Modifier.fillMaxWidth(),
@@ -1571,26 +1633,100 @@ private fun SettingsShellScreen(
         ProfilePanel(displayName = displayName.ifBlank { "OpenClaw" }, onClick = { onRouteChange(SettingsRoute.Profile) })
       }
 
+      item {
+        SettingsQuickTiles(onOpen = onRouteChange)
+      }
+
       val settingsRows =
         listOf(
+          // ── 🤖 AIパートナー ──
           SettingsRow(
-            SettingsRoute.Gateway,
-            verbatimText(gatewaySummary(gatewayConnectionDisplay)),
-            status = gatewayConnectionDisplay.isConnected,
+            SettingsRoute.PartnerManagement,
+            nativeText("作成・ペルソナ・画像"),
+            status = true,
           ),
-          SettingsRow(SettingsRoute.NodesDevices, verbatimText(nodesDevicesSummaryText(nodesDevicesSummary)), status = nodesDevicesStatus(nodesDevicesSummary)),
-          SettingsRow(SettingsRoute.Channels, channelsState.summaryText(::channelsSummaryText), status = if (channelsState.errorText != null) false else channelsSummary?.let(::channelsStatus)),
-          SettingsRow(SettingsRoute.Agents, if (agents.isEmpty()) nativeText("Load from gateway") else nativeText("\${agents.size} available", agents.size), status = agents.isNotEmpty()),
           SettingsRow(
-            SettingsRoute.SystemAgent,
-            nativeText("Setup, status, and repair"),
-            status =
-              when (systemAgentChatState.access) {
-                SystemAgentChatAccess.Ready -> true
-                SystemAgentChatAccess.CheckingGateway -> null
-                else -> false
-              },
+            SettingsRoute.CoreAgentSettings,
+            nativeText("人格・口調・SOUL"),
+            status = isConnected,
           ),
+          SettingsRow(
+            SettingsRoute.GroupChat,
+            nativeText("複数パートナーで会話"),
+            status = isConnected,
+          ),
+          SettingsRow(
+            SettingsRoute.VoiceStudio,
+            nativeText("録音からオリジナルの声を作成"),
+            status = isConnected,
+          ),
+          SettingsRow(
+            SettingsRoute.AvatarCustomize,
+            nativeText("見た目・カラー変更"),
+            status = isConnected,
+          ),
+          SettingsRow(
+            SettingsRoute.PartnerBond,
+            nativeText("レベル・バッジ"),
+            status = isConnected,
+          ),
+
+          // ── 🧠 知識・記憶 ──
+          SettingsRow(
+            SettingsRoute.MemoryInspector,
+            nativeText("長期・短期・RAG"),
+            status = isConnected,
+          ),
+          SettingsRow(
+            SettingsRoute.PartnerMemory,
+            nativeText("事実・学習データ"),
+            status = isConnected,
+          ),
+          SettingsRow(
+            SettingsRoute.FeatureSettings,
+            nativeText("検索プロバイダ・防災"),
+            status = isConnected,
+          ),
+          SettingsRow(
+            SettingsRoute.PartnerDream,
+            nativeText("夜空の記録"),
+            status = isConnected,
+          ),
+          SettingsRow(
+            SettingsRoute.MoodDashboard,
+            nativeText("心の推移グラフ"),
+            status = isConnected,
+          ),
+
+          // ── 🎮 生活・エンタメ ──
+          SettingsRow(
+            SettingsRoute.DailySettings,
+            nativeText("毎朝の挨拶・運勢"),
+            status = isConnected,
+          ),
+          SettingsRow(
+            SettingsRoute.Diary,
+            nativeText("AI代筆"),
+            status = isConnected,
+          ),
+          SettingsRow(
+            SettingsRoute.MiniGame,
+            nativeText("しりとり・クイズ・創作"),
+            status = isConnected,
+          ),
+
+          // ── ⚙️ モデル・自動化 ──
+          SettingsRow(
+            SettingsRoute.OllamaCatalog,
+            nativeText("DL・切替・HF検索"),
+            status = isConnected,
+          ),
+          SettingsRow(
+            SettingsRoute.OnDeviceGguf,
+            nativeText("スマホ単体で推論"),
+            status = true,
+          ),
+          SettingsRow(SettingsRoute.Agents, if (agents.isEmpty()) nativeText("Load from gateway") else nativeText("${agents.size} available", agents.size), status = agents.isNotEmpty()),
           SettingsRow(
             SettingsRoute.ProvidersModels,
             when {
@@ -1606,6 +1742,7 @@ private fun SettingsShellScreen(
                 else -> false
               },
           ),
+          SettingsRow(SettingsRoute.SpecialistJobs, nativeText("裏で動く小型モデルと作業の状況"), status = isConnected),
           SettingsRow(SettingsRoute.Approvals, verbatimText(approvalsSummary(pendingApprovalsCount)), status = approvalsStatus(pendingApprovalsCount)),
           SettingsRow(SettingsRoute.CronJobs, verbatimText(cronJobsSummary(cronStatus.jobs)), status = if (cronStatus.jobs > 0) cronStatus.enabled else null),
           SettingsRow(SettingsRoute.Usage, usageState.summaryText { usageSummaryText(it.providers.size) }, status = if (usageState.errorText != null) false else true.takeIf { usageSummary?.providers?.isNotEmpty() == true }),
@@ -1615,12 +1752,41 @@ private fun SettingsShellScreen(
             verbatimText(skillWorkshopSummaryText(skillWorkshopSummary)),
             status = skillWorkshopStatus(skillWorkshopSummary),
           ),
+          SettingsRow(
+            SettingsRoute.SystemAgent,
+            nativeText("Setup, status, and repair"),
+            status =
+              when (systemAgentChatState.access) {
+                SystemAgentChatAccess.Ready -> true
+                SystemAgentChatAccess.CheckingGateway -> null
+                else -> false
+              },
+          ),
           SettingsRow(SettingsRoute.Dreaming, dreamingState.summaryText(::dreamingSummaryText), status = if (dreamingState.errorText != null) false else dreamingSummary?.let(::dreamingStatus)),
           SettingsRow(SettingsRoute.Terminal, nativeText("Shell in the agent workspace"), status = isConnected),
           SettingsRow(SettingsRoute.Desktop, nativeText("View a machine screen"), status = isConnected),
+
+          // ── 🔗 接続・サーバー ──
+          SettingsRow(
+            SettingsRoute.Gateway,
+            verbatimText(gatewaySummary(gatewayConnectionDisplay)),
+            status = gatewayConnectionDisplay.isConnected,
+          ),
+          SettingsRow(SettingsRoute.GatewayConfig, nativeText("Raw JSON configuration editor"), status = gatewayConnectionDisplay.isConnected),
+          SettingsRow(SettingsRoute.NodesDevices, verbatimText(nodesDevicesSummaryText(nodesDevicesSummary)), status = nodesDevicesStatus(nodesDevicesSummary)),
+          SettingsRow(SettingsRoute.Channels, channelsState.summaryText(::channelsSummaryText), status = if (channelsState.errorText != null) false else channelsSummary?.let(::channelsStatus)),
+          SettingsRow(
+            SettingsRoute.BackupRestore,
+            nativeText("設定・ペアリングの保存"),
+            status = true,
+          ),
+
+          // ── 📱 端末・プライバシー ──
           SettingsRow(SettingsRoute.Voice, if (speakerEnabled) nativeText("Speaker on") else nativeText("Speaker muted")),
           SettingsRow(SettingsRoute.Notifications, if (notificationForwardingEnabled) nativeText("Smart delivery") else nativeText("Off")),
           SettingsRow(SettingsRoute.PhoneCapabilities, if (cameraEnabled) nativeText("Camera enabled") else nativeText("Locked"), status = !cameraEnabled),
+
+          // ── 🎨 プロフィール・外観 ──
           SettingsRow(
             SettingsRoute.Appearance,
             joinedNativeText(
@@ -1629,15 +1795,19 @@ private fun SettingsShellScreen(
             ),
           ),
           SettingsRow(SettingsRoute.About, nativeText("Version and update")),
+
+          // ── 🔧 診断 ──
+          SettingsRow(SettingsRoute.PcHealth, nativeText("温度・メモリ・稼働状況"), status = isConnected),
           SettingsRow(SettingsRoute.Health, nativeText("Diagnostics"), status = isConnected),
         ).filter { it.route.isAvailable(desktopObserveAvailable) }
 
       settingsSections(settingsRows).forEach { section ->
-        item {
-          SettingsSectionTitle(section.title)
-        }
-        item {
-          SettingsGroup(rows = section.rows, onOpen = onRouteChange)
+        item(key = "section_${section.category.name}") {
+          CollapsibleSettingsSection(
+            section = section,
+            selectedRoute = selectedRoute,
+            onOpen = onRouteChange,
+          )
         }
       }
 
@@ -1682,6 +1852,94 @@ private fun SettingsShellScreen(
             Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (isConnected) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
           }
         }
+      }
+    }
+  }
+  }
+
+  // Unfolded foldables and tablets: list on the left, the open setting on the right.
+  BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+    val twoPane = maxWidth >= SHELL_TWO_PANE_MIN_WIDTH
+    val listPaneWidth = shellListPaneWidth(maxWidth)
+    val detail: @Composable () -> Unit = {
+      SettingsDetailScreen(
+        viewModel = viewModel,
+        route = route,
+        onBack = onBack,
+        onOpenSettingsRoute = onRouteChange,
+      )
+    }
+    // One call site per pane so folding/unfolding keeps an open setting's unsaved edits.
+    Row(modifier = Modifier.fillMaxSize()) {
+      if (twoPane) {
+        Box(modifier = Modifier.width(listPaneWidth).fillMaxHeight().testTag("settings-list-pane")) {
+          SettingsHomeList(selectedRoute = route)
+        }
+        Box(modifier = Modifier.fillMaxHeight().width(1.dp).background(ClawTheme.colors.border))
+      }
+      Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+        when {
+          route != SettingsRoute.Home -> detail()
+          twoPane -> SettingsDetailPlaceholder()
+          else -> SettingsHomeList(selectedRoute = null)
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun SettingsDetailPlaceholder() {
+  Column(
+    modifier = Modifier.fillMaxSize().padding(32.dp),
+    verticalArrangement = Arrangement.Center,
+    horizontalAlignment = Alignment.CenterHorizontally,
+  ) {
+    Icon(Icons.Outlined.Settings, contentDescription = null, modifier = Modifier.size(40.dp), tint = ClawTheme.colors.textSubtle)
+    Spacer(modifier = Modifier.height(10.dp))
+    Text(
+      text = "左の一覧から設定を選ぶと、ここに表示されます",
+      style = ClawTheme.type.body,
+      color = ClawTheme.colors.textMuted,
+      textAlign = TextAlign.Center,
+    )
+  }
+}
+
+/** Content width from which list + detail sit side by side (an unfolded book-style foldable in portrait). */
+internal val SHELL_TWO_PANE_MIN_WIDTH = 600.dp
+
+/** List pane width: wide enough to read rows, leaving most of the space for the detail. */
+internal fun shellListPaneWidth(totalWidth: androidx.compose.ui.unit.Dp): androidx.compose.ui.unit.Dp =
+  (totalWidth * 0.4f).coerceIn(260.dp, 400.dp)
+
+@Composable
+private fun SettingsQuickTiles(onOpen: (SettingsRoute) -> Unit) {
+  val tiles = listOf(SettingsRoute.PartnerManagement, SettingsRoute.OllamaCatalog, SettingsRoute.Gateway, SettingsRoute.Appearance)
+  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Text(text = "よく使う", style = ClawTheme.type.section.copy(fontSize = 15.sp), color = ClawTheme.colors.text)
+    tiles.chunked(2).forEach { rowTiles ->
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        rowTiles.forEach { tile ->
+          val title = tile.title.resolveNativeTextResource()
+          Surface(
+            onClick = { onOpen(tile) },
+            modifier = Modifier.weight(1f).heightIn(min = 64.dp),
+            shape = RoundedCornerShape(ClawTheme.radii.row),
+            color = ClawTheme.colors.surfaceRaised,
+            border = BorderStroke(1.dp, ClawTheme.colors.border),
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+              Icon(tile.icon, contentDescription = null, modifier = Modifier.size(22.dp), tint = ClawTheme.colors.primary)
+              Text(text = title, style = ClawTheme.type.body.copy(fontSize = 14.sp), color = ClawTheme.colors.text, maxLines = 2)
+            }
+          }
+        }
+        if (rowTiles.size == 1) Spacer(modifier = Modifier.weight(1f))
       }
     }
   }
@@ -1839,13 +2097,14 @@ internal data class SettingsRow(
 
 internal data class SettingsSection(
   val title: NativeText,
+  val category: SettingsCategory,
   val rows: List<SettingsRow>,
 )
 
 internal fun settingsSections(rows: List<SettingsRow>): List<SettingsSection> =
   SettingsCategory.entries.mapNotNull { category ->
     val sectionRows = rows.filter { row -> row.route.category == category }
-    if (sectionRows.isEmpty()) null else SettingsSection(title = category.title, rows = sectionRows)
+    if (sectionRows.isEmpty()) null else SettingsSection(title = category.title, category = category, rows = sectionRows)
   }
 
 @Composable
@@ -1856,6 +2115,73 @@ private fun SettingsSectionTitle(title: NativeText) {
     style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 16.sp),
     color = ClawTheme.colors.textMuted,
   )
+}
+
+/**
+ * 折りたたみ可能なセクション。タップでヘッダーを展開/折りたたみ切替。
+ * defaultExpanded がカテゴリごとに定義されている。
+ */
+@Composable
+private fun CollapsibleSettingsSection(
+  section: SettingsSection,
+  selectedRoute: SettingsRoute? = null,
+  onOpen: (SettingsRoute) -> Unit,
+) {
+  var expanded by rememberSaveable(section.category.name) {
+    mutableStateOf(section.category.defaultExpanded)
+  }
+  val arrowRotation by animateFloatAsState(
+    targetValue = if (expanded) 0f else -90f,
+    label = "arrow",
+  )
+
+  Column {
+    // タップ可能ヘッダー（タイトル + 項目数 + 矢印）
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(6.dp))
+        .clickable { expanded = !expanded }
+        .testTag("settings-section-${section.category.name}")
+        .padding(vertical = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = section.title.resolveNativeTextResource(),
+        style = ClawTheme.type.section.copy(fontSize = 15.sp, lineHeight = 20.sp),
+        color = ClawTheme.colors.text,
+      )
+      Spacer(modifier = Modifier.width(6.dp))
+      // 項目数バッジ
+      Text(
+        text = "${section.rows.size}",
+        style = ClawTheme.type.caption.copy(fontSize = 10.sp),
+        color = ClawTheme.colors.textMuted,
+        modifier = Modifier
+          .clip(RoundedCornerShape(8.dp))
+          .background(ClawTheme.colors.surfaceRaised)
+          .padding(horizontal = 6.dp, vertical = 1.dp),
+      )
+      Spacer(modifier = Modifier.weight(1f))
+      Icon(
+        imageVector = Icons.Default.KeyboardArrowDown,
+        contentDescription = if (expanded) "折りたたむ" else "展開",
+        tint = ClawTheme.colors.textMuted,
+        modifier = Modifier
+          .size(18.dp)
+          .graphicsLayer { rotationZ = arrowRotation },
+      )
+    }
+
+    // コンテンツ (アニメーション付き展開)
+    AnimatedVisibility(
+      visible = expanded,
+      enter = expandVertically(),
+      exit = shrinkVertically(),
+    ) {
+      SettingsGroup(rows = section.rows, selectedRoute = selectedRoute, onOpen = onOpen)
+    }
+  }
 }
 
 @Composable
@@ -1906,17 +2232,26 @@ private fun ProfilePanel(
 @Composable
 private fun SettingsGroup(
   rows: List<SettingsRow>,
+  selectedRoute: SettingsRoute? = null,
   onOpen: (SettingsRoute) -> Unit,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
-      SettingsListRow(
-        title = row.route.title,
-        value = row.value,
-        icon = row.route.icon,
-        status = row.status,
-        onClick = { onOpen(row.route) },
-      )
+      Box(
+        modifier =
+          Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (row.route == selectedRoute) ClawTheme.colors.primary.copy(alpha = 0.12f) else Color.Transparent)
+            .semantics { selected = row.route == selectedRoute },
+      ) {
+        SettingsListRow(
+          title = row.route.title,
+          value = row.value,
+          icon = row.route.icon,
+          status = row.status,
+          onClick = { onOpen(row.route) },
+        )
+      }
     }
   }
 }
@@ -1935,12 +2270,17 @@ private fun SettingsListRow(
     title = localizedTitle,
     subtitle = value.resolveNativeTextResource().takeIf { it.isNotBlank() },
     leading = {
-      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
+      Box(
+        modifier = Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)).background(ClawTheme.colors.primary.copy(alpha = 0.12f)),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = ClawTheme.colors.primary)
+      }
     },
     trailing = {
-      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         status?.let { active ->
-          Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
+          Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
         }
         Icon(
           imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -1978,3 +2318,496 @@ internal fun gatewaySummary(
 }
 
 internal fun gatewaySummary(display: GatewayConnectionDisplay): String = gatewaySummary(display.statusText, display.isConnected, display.problem)
+
+private data class QuickPartnerEntry(
+  val id: String,
+  val name: String,
+  val avatarUrl: String,
+  val modelId: String,
+)
+
+@Composable
+internal fun QuickPartnerChatPanel(
+  viewModel: MainViewModel,
+  onOpenPartnerChat: (String) -> Unit,
+  onOpenPartnerManagement: () -> Unit,
+) {
+  val coroutineScope = rememberCoroutineScope()
+  var partners by remember { mutableStateOf<List<QuickPartnerEntry>>(emptyList()) }
+  val connectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
+
+  fun loadPartners() {
+    coroutineScope.launch {
+      try {
+        val resultJson = viewModel.runGatewayRpc(GatewayMethod.PartnerList, "{}")
+        val obj = JSONObject(resultJson)
+        val arr = obj.optJSONArray("partners") ?: JSONArray()
+        val list = mutableListOf<QuickPartnerEntry>()
+        for (i in 0 until arr.length()) {
+          val p = arr.getJSONObject(i)
+          list.add(
+            QuickPartnerEntry(
+              id = p.optString("id", ""),
+              name = p.optString("name", "パートナー"),
+              avatarUrl = p.optString("avatarUrl", ""),
+              modelId = p.optString("modelId", "")
+            )
+          )
+        }
+        partners = list
+      } catch (_: Exception) {}
+    }
+  }
+
+  LaunchedEffect(connectionDisplay.isConnected) {
+    if (connectionDisplay.isConnected) {
+      loadPartners()
+    }
+  }
+
+  if (partners.isNotEmpty()) {
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+              text = "💬 誰と話しますか？",
+              style = ClawTheme.type.section.copy(fontSize = 15.sp),
+              color = ClawTheme.colors.text,
+              fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+            )
+          }
+          ClawSecondaryButton(
+            text = "パートナー管理",
+            onClick = onOpenPartnerManagement,
+          )
+        }
+
+        androidx.compose.foundation.lazy.LazyRow(
+          horizontalArrangement = Arrangement.spacedBy(14.dp),
+          contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp),
+        ) {
+          items(partners) { partner ->
+            Column(
+              horizontalAlignment = Alignment.CenterHorizontally,
+              modifier = Modifier
+                .clip(RoundedCornerShape(12.dp))
+                .clickable {
+                  onOpenPartnerChat(partner.id)
+                }
+                .padding(vertical = 4.dp, horizontal = 6.dp),
+            ) {
+              PartnerAvatar(
+                avatarUrl = partner.avatarUrl,
+                name = partner.name,
+                size = 54.dp,
+              )
+              Spacer(modifier = Modifier.height(6.dp))
+              Text(
+                text = partner.name,
+                style = ClawTheme.type.caption.copy(
+                  fontSize = 12.sp,
+                  fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                ),
+                color = ClawTheme.colors.text,
+                maxLines = 1,
+              )
+              Text(
+                text = "タップでチャット",
+                style = ClawTheme.type.caption.copy(fontSize = 10.sp),
+                color = ClawTheme.colors.primary,
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+private data class EngineModelChoice(
+  val id: String,
+  val label: String,
+  val badge: String,
+  val description: String,
+  val vramText: String,
+  val isRecommended: Boolean = false,
+)
+
+private data class EngineThinkingChoice(
+  val id: String,
+  val label: String,
+  val budgetText: String,
+)
+
+@Composable
+internal fun OverviewModelEngineControlPanel(
+  viewModel: MainViewModel,
+  onOpenChat: () -> Unit,
+) {
+  val coroutineScope = rememberCoroutineScope()
+  val connectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
+  val isConnected = connectionDisplay.isConnected
+
+  val modelChoices = remember {
+    listOf(
+      EngineModelChoice(
+        id = "bonsai/swift-bonsai-ptq1",
+        label = "Swift-Bonsai 27B (PTQ1)",
+        badge = "爆速推奨",
+        description = "1bit超軽量+ドラフトモデル併用で爆速推論。仕事中もチャットもOK。",
+        vramText = "6.7 GB (PTQ1+Draft)",
+        isRecommended = true,
+      ),
+      EngineModelChoice(
+        id = "bonsai/swift-bonsai-pq2",
+        label = "Swift-Bonsai 27B (PQ2)",
+        badge = "高精度",
+        description = "2bit高精度。切替時にChrome等を自動停止しVRAM確保。チャット専用時に。",
+        vramText = "6.9 GB (自動VRAM確保)",
+      ),
+      EngineModelChoice(
+        id = "bonsai/bonsai2-pq1",
+        label = "Bonsai2 (PQ1)",
+        badge = "新世代",
+        description = "Bonsai第2世代+ドラフトモデル併用。軽量高速で日常会話・タスク向け。",
+        vramText = "6.7 GB (PTQ1+Draft)",
+      ),
+      EngineModelChoice(
+        id = "bonsai/bonsai2CLACKpq1",
+        label = "Bonsai2 CLACK (PQ1)",
+        badge = "自由型",
+        description = "CLACKベース+ドラフトモデル併用。ガードレール緩和・クリエイティブ用途。",
+        vramText = "6.7 GB (PTQ1+Draft)",
+      ),
+      EngineModelChoice(
+        id = "bonsai/ternary-bonsai-2-27b",
+        label = "Ternary-Bonsai 27B (PQ2)",
+        badge = "標準",
+        description = "バランス型27B。切替時にChrome等を自動停止しVRAM確保。チャット専用時に。",
+        vramText = "6.9 GB (自動VRAM確保)",
+      ),
+      EngineModelChoice(
+        id = "bonsai/bonsai-crack",
+        label = "Bonsai-Crack 27B (PQ2)",
+        badge = "自由型",
+        description = "ガードレール緩和版。切替時にChrome等を自動停止しVRAM確保。",
+        vramText = "6.9 GB (自動VRAM確保)",
+      ),
+    )
+  }
+
+  val thinkingChoices = remember {
+    listOf(
+      EngineThinkingChoice("off", "⚡ Off", "思考なし"),
+      EngineThinkingChoice("low", "🟢 低", "512t"),
+      EngineThinkingChoice("medium", "🟡 中", "2K t"),
+      EngineThinkingChoice("high", "🔴 高", "8K t"),
+      EngineThinkingChoice("max", "💥 Max", "無制限"),
+    )
+  }
+
+
+  var selectedModelId by remember { mutableStateOf("bonsai/swift-bonsai-ptq1") }
+  var selectedThinkingLevel by remember { mutableStateOf("medium") }
+  var isApplying by remember { mutableStateOf(false) }
+  var statusMessage by remember { mutableStateOf<String?>(null) }
+  var isSuccess by remember { mutableStateOf(false) }
+
+  ClawPanel {
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+      // ヘッダー行
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            text = "🧠 推論モデル・思考エンジン統括",
+            style = ClawTheme.type.section.copy(fontSize = 15.sp),
+            color = ClawTheme.colors.text,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+          )
+        }
+        Text(
+          text = if (isApplying) "適用中..." else "VRAM安全制御",
+          style = ClawTheme.type.caption.copy(fontSize = 11.sp),
+          color = if (isApplying) ClawTheme.colors.primary else ClawTheme.colors.textMuted,
+        )
+      }
+
+      // 説明
+      Text(
+        text = "ホームから全チャットのモデルと推論思考を一括設定。古いプロセスを安全終了しVRAM溢れを防ぎます。",
+        style = ClawTheme.type.caption.copy(fontSize = 12.sp),
+        color = ClawTheme.colors.textMuted,
+      )
+
+      // モデル選択エリア
+      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+          text = "実行モデル選択",
+          style = ClawTheme.type.caption.copy(
+            fontSize = 12.sp,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+          ),
+          color = ClawTheme.colors.text,
+        )
+
+        modelChoices.forEach { choice ->
+          val isSelected = choice.id == selectedModelId
+          Box(
+            modifier = Modifier
+              .fillMaxWidth()
+              .clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
+              .background(
+                if (isSelected) ClawTheme.colors.primary.copy(alpha = 0.12f)
+                else ClawTheme.colors.surfaceRaised.copy(alpha = 0.5f)
+              )
+              .border(
+                width = if (isSelected) 1.5.dp else 1.dp,
+                color = if (isSelected) ClawTheme.colors.primary else ClawTheme.colors.border.copy(alpha = 0.6f),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+              )
+              .clickable { selectedModelId = choice.id }
+              .padding(horizontal = 12.dp, vertical = 8.dp),
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+              Column(modifier = Modifier.weight(1f)) {
+                Row(
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                  Text(
+                    text = choice.label,
+                    style = ClawTheme.type.body.copy(
+                      fontSize = 13.sp,
+                      fontWeight = if (isSelected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Medium,
+                    ),
+                    color = if (isSelected) ClawTheme.colors.text else ClawTheme.colors.textMuted,
+                  )
+                  if (choice.isRecommended) {
+                    Box(
+                      modifier = Modifier
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+                        .background(ClawTheme.colors.primary)
+                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                    ) {
+                      Text(
+                        text = choice.badge,
+                        style = ClawTheme.type.caption.copy(
+                          fontSize = 9.sp,
+                          fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                        ),
+                        color = androidx.compose.ui.graphics.Color.White,
+                      )
+                    }
+                  }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                  text = choice.description,
+                  style = ClawTheme.type.caption.copy(fontSize = 11.sp),
+                  color = ClawTheme.colors.textMuted,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+              }
+              Spacer(modifier = Modifier.width(8.dp))
+              Text(
+                text = choice.vramText,
+                style = ClawTheme.type.caption.copy(
+                  fontSize = 11.sp,
+                  fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                ),
+                color = if (isSelected) ClawTheme.colors.primary else ClawTheme.colors.textMuted,
+              )
+            }
+          }
+        }
+      }
+
+      // 思考レベル選択
+      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+          text = "思考レベル (Reasoning Budget)",
+          style = ClawTheme.type.caption.copy(
+            fontSize = 12.sp,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+          ),
+          color = ClawTheme.colors.text,
+        )
+
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          thinkingChoices.forEach { choice ->
+            val isSelected = choice.id == selectedThinkingLevel
+            Box(
+              modifier = Modifier
+                .weight(1f)
+                .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                .background(
+                  if (isSelected) ClawTheme.colors.primary.copy(alpha = 0.15f)
+                  else ClawTheme.colors.surfaceRaised.copy(alpha = 0.45f)
+                )
+                .border(
+                  width = if (isSelected) 1.5.dp else 1.dp,
+                  color = if (isSelected) ClawTheme.colors.primary else ClawTheme.colors.border.copy(alpha = 0.6f),
+                  shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                )
+                .clickable { selectedThinkingLevel = choice.id }
+                .padding(vertical = 8.dp, horizontal = 4.dp),
+              contentAlignment = Alignment.Center,
+            ) {
+              Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                  text = choice.label,
+                  style = ClawTheme.type.caption.copy(
+                    fontSize = 11.sp,
+                    fontWeight = if (isSelected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Medium,
+                  ),
+                  color = if (isSelected) ClawTheme.colors.text else ClawTheme.colors.textMuted,
+                  maxLines = 1,
+                )
+                Text(
+                  text = choice.budgetText,
+                  style = ClawTheme.type.caption.copy(fontSize = 9.sp),
+                  color = if (isSelected) ClawTheme.colors.primary else ClawTheme.colors.textMuted.copy(alpha = 0.7f),
+                  maxLines = 1,
+                )
+              }
+            }
+          }
+        }
+      }
+
+      // ステータスメッセージ
+      statusMessage?.let { msg ->
+        Box(
+          modifier = Modifier
+            .fillMaxWidth()
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+            .background(
+              if (isSuccess) androidx.compose.ui.graphics.Color(0xFF1B5E20).copy(alpha = 0.3f)
+              else androidx.compose.ui.graphics.Color(0xFFB71C1C).copy(alpha = 0.3f)
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+          Text(
+            text = msg,
+            style = ClawTheme.type.caption.copy(fontSize = 12.sp),
+            color = if (isSuccess) androidx.compose.ui.graphics.Color(0xFF81C784) else androidx.compose.ui.graphics.Color(0xFFEF9A9A),
+          )
+        }
+      }
+
+      // 適用ボタン
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Box(
+          modifier = Modifier
+            .weight(1f)
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
+            .background(
+              if (isApplying || !isConnected) ClawTheme.colors.primary.copy(alpha = 0.4f)
+              else ClawTheme.colors.primary
+            )
+            .clickable(enabled = !isApplying && isConnected) {
+              isApplying = true
+              statusMessage = "プロセス切替中... VRAM最適化中..."
+              isSuccess = false
+
+              coroutineScope.launch {
+                try {
+                  val params = JSONObject().apply {
+                    put("model", selectedModelId)
+                    put("thinkingLevel", selectedThinkingLevel)
+                  }
+                  val resultJson = viewModel.runGatewayRpc(
+                    GatewayMethod.OllamaModelSwitch,
+                    params.toString(),
+                    timeoutMs = 45_000L,
+                  )
+                  val rawObj = JSONObject(resultJson)
+                  val obj = rawObj.optJSONObject("payload") ?: rawObj
+                  val ok = obj.optBoolean("success", false) || obj.optBoolean("ok", false)
+
+                  if (ok) {
+                    isSuccess = true
+                    val activeM = obj.optString("activeModel", selectedModelId)
+                    statusMessage = "✅ 適用完了！「$activeM」(思考: $selectedThinkingLevel) で起動しました。"
+                  } else {
+                    val errMsg = obj.optString("error", "切替に失敗しました")
+                    statusMessage = "❌ エラー: $errMsg"
+                  }
+                } catch (e: Exception) {
+                  statusMessage = "❌ 通信エラー: ${e.message}"
+                } finally {
+                  isApplying = false
+                }
+              }
+            }
+            .padding(vertical = 12.dp),
+          contentAlignment = Alignment.Center,
+        ) {
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            if (isApplying) {
+              androidx.compose.material3.CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                color = androidx.compose.ui.graphics.Color.White,
+                strokeWidth = 2.dp,
+              )
+            }
+            Text(
+              text = if (isApplying) "適用・起動中..." else "⚡ 設定を適用して起動",
+              style = ClawTheme.type.body.copy(
+                fontSize = 14.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+              ),
+              color = androidx.compose.ui.graphics.Color.White,
+            )
+          }
+        }
+
+        if (isSuccess) {
+          Box(
+            modifier = Modifier
+              .clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
+              .background(ClawTheme.colors.surfaceRaised)
+              .clickable(onClick = onOpenChat)
+              .padding(horizontal = 14.dp, vertical = 12.dp),
+            contentAlignment = Alignment.Center,
+          ) {
+            Text(
+              text = "チャットへ →",
+              style = ClawTheme.type.body.copy(
+                fontSize = 13.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+              ),
+              color = ClawTheme.colors.primary,
+            )
+          }
+        }
+      }
+    }
+  }
+}

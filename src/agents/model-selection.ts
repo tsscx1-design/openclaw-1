@@ -24,6 +24,7 @@ import {
 import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
+  resolveTaskModelSelection,
 } from "./model-selection-config.js";
 import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
 import { resolvePersistedOverrideModelRef } from "./model-selection-persisted.js";
@@ -48,7 +49,11 @@ export {
 
 export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef };
 
-export { resolveDefaultModelForAgent, resolveSubagentConfiguredModelSelection };
+export {
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+  resolveTaskModelSelection,
+};
 
 export {
   normalizeStoredOverrideModel,

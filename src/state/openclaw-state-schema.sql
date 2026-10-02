@@ -2577,3 +2577,10 @@ CREATE TABLE IF NOT EXISTS secret_store_entries (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS secret_store_entries_live_idx
   ON secret_store_entries (scope_kind, scope_id, name) WHERE deleted_at_ms IS NULL;
+
+CREATE TABLE IF NOT EXISTS agent_souls (
+  soul_id TEXT NOT NULL PRIMARY KEY,
+  name TEXT NOT NULL,
+  prompt_text TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL
+) STRICT;

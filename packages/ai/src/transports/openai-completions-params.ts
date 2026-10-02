@@ -102,6 +102,7 @@ function resolveOpenAICompletionsModelMaxTokens(model: OpenAIModeModel): number 
 
 const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
 const OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE = 8_000;
+const OPENAI_COMPLETIONS_MIN_CLAMPED_OUTPUT_TOKENS = 2_048;
 
 // Used only to bound `max_completion_tokens` below the effective context cap
 // for strict OpenAI-compatible servers (e.g. vLLM, StepFun). The CJK-aware
@@ -362,6 +363,42 @@ export function buildOpenAICompletionsRequest(
       messages = flattenCompletionMessagesToStringContent(messages);
     }
   }
+  // ⚡ Bonsai 2 (PrismML Qwen3.8-27B) 即時ストリーミング・Empty CoT 最適化
+  const isBonsai =
+    model.provider === "bonsai" ||
+    model.provider === "prism-local" ||
+    model.id.toLowerCase().includes("bonsai");
+
+  if (isBonsai && Array.isArray(messages) && messages.length > 0) {
+    const lastMsg = messages[messages.length - 1] as
+      | { role?: string; content?: unknown }
+      | undefined;
+    if (lastMsg?.role === "user") {
+      let userText = "";
+      if (typeof lastMsg.content === "string") {
+        userText = lastMsg.content;
+      } else if (Array.isArray(lastMsg.content)) {
+        userText = lastMsg.content
+          .map((p: unknown) => (typeof p === "string" ? p : (p as { text?: string })?.text || ""))
+          .join(" ");
+      }
+
+      const requestedEffort = options?.reasoningEffort;
+      // Thinking level "off" reaches the transport as reasoningEffort "none".
+      const isExplicitOff = requestedEffort === "none";
+
+      // ユーザーの会話では思考（Reasoning）を殺さず100%活用！
+      // 裏のシステム自動メンテナンス（/compact 等）や、明示的な思考オフ時のみ長考・GPU占有を防止
+      const isSystemMaintenance = /^\/(?:compact|summarize|noop|ping)\b/i.test(userText.trim());
+
+      if (isExplicitOff || isSystemMaintenance) {
+        messages.push({
+          role: "assistant",
+          content: "<think>\n</think>\n",
+        });
+      }
+    }
+  }
   const promptCacheKey = resolvePromptCacheKey(options, cacheRetention);
   const params: CompletionsRequest = {
     model: model.id,
@@ -508,7 +545,19 @@ export function buildOpenAICompletionsRequest(
       effectiveContextTokens !== undefined
     ) {
       const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
-      const remainingBudget = Math.max(1, effectiveContextTokens - estimatedInputTokens - 1);
+      // The input estimate is deliberately high (CJK-weighted, plus a safety
+      // margin), and preflight compaction already enforces the input cap. Never
+      // clamp below a usable floor: max_tokens=1 guarantees a stopReason=length turn.
+      const outputFloor = Math.min(
+        clampedMaxTokens,
+        OPENAI_COMPLETIONS_MIN_CLAMPED_OUTPUT_TOKENS,
+        Math.floor(effectiveContextTokens / 8),
+      );
+      const remainingBudget = Math.max(
+        1,
+        outputFloor,
+        effectiveContextTokens - estimatedInputTokens - 1,
+      );
       if (clampedMaxTokens > remainingBudget) {
         clampedMaxTokens = remainingBudget;
         emitModelTransportDebug(

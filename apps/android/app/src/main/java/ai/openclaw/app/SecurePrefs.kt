@@ -512,13 +512,90 @@ class SecurePrefs(
     _notificationForwardingSessionKey.value = normalized
   }
 
+  private val backupCredentialsFile: java.io.File by lazy {
+    java.io.File(appContext.filesDir, "gateway_credentials_backup.json")
+  }
+
+  private fun saveCredentialToLocalBackup(stableId: String, credentials: GatewayCredentials) {
+    try {
+      val map = loadAllCredentialsFromBackup().toMutableMap()
+      map[stableId] = credentials.normalized()
+      backupCredentialsFile.writeText(json.encodeToString(map))
+      plainPrefs.edit {
+        putString("gateway.credentials.backup.$stableId", json.encodeToString(credentials.normalized()))
+      }
+    } catch (_: Throwable) {}
+  }
+
+  private fun removeCredentialFromLocalBackup(stableId: String) {
+    try {
+      val map = loadAllCredentialsFromBackup().toMutableMap()
+      map.remove(stableId)
+      backupCredentialsFile.writeText(json.encodeToString(map))
+      plainPrefs.edit {
+        remove("gateway.credentials.backup.$stableId")
+      }
+    } catch (_: Throwable) {}
+  }
+
+  private fun loadCredentialFromLocalBackup(stableId: String): GatewayCredentials? {
+    try {
+      val map = loadAllCredentialsFromBackup()
+      val fromFile = map[stableId]
+      if (fromFile != null && (fromFile.token != null || fromFile.password != null)) {
+        return fromFile
+      }
+      val plainRaw = plainPrefs.getString("gateway.credentials.backup.$stableId", null)
+      if (!plainRaw.isNullOrBlank()) {
+        val creds = json.decodeFromString<GatewayCredentials>(plainRaw).normalized()
+        if (creds.token != null || creds.password != null) return creds
+      }
+    } catch (_: Throwable) {}
+    return null
+  }
+
+  private fun loadAllCredentialsFromBackup(): Map<String, GatewayCredentials> {
+    return try {
+      if (!backupCredentialsFile.exists()) emptyMap()
+      else {
+        val text = backupCredentialsFile.readText()
+        json.decodeFromString<Map<String, GatewayCredentials>>(text)
+      }
+    } catch (_: Throwable) {
+      emptyMap()
+    }
+  }
+
   fun loadGatewayCredentials(stableId: String): GatewayCredentials {
     // The lazy migration can write credentials; initialize it before taking the
     // credential lock so concurrent first access cannot invert those locks.
     gatewayRegistry
     return synchronized(gatewayCredentialLock) {
-      val raw = securePrefs.getString(gatewayCredentialsKey(stableId), null) ?: return GatewayCredentials()
-      return runCatching { json.decodeFromString<GatewayCredentials>(raw).normalized() }.getOrDefault(GatewayCredentials())
+      var creds: GatewayCredentials? = null
+      try {
+        val raw = securePrefs.getString(gatewayCredentialsKey(stableId), null)
+        if (raw != null) {
+          creds = runCatching { json.decodeFromString<GatewayCredentials>(raw).normalized() }.getOrNull()
+        }
+      } catch (_: Throwable) {
+        // Keystore破損または復号例外
+      }
+
+      if (creds != null && (creds.token != null || creds.password != null)) {
+        return creds
+      }
+
+      // securePrefsから読めない、または空の場合は自己修復バックアップから復元
+      val backup = loadCredentialFromLocalBackup(stableId)
+      if (backup != null && (backup.token != null || backup.password != null)) {
+        runCatching {
+          val key = gatewayCredentialsKey(stableId)
+          securePrefs.edit { putString(key, json.encodeToString(backup.normalized())) }
+        }
+        return backup
+      }
+
+      return creds ?: GatewayCredentials()
     }
   }
 
@@ -529,7 +606,11 @@ class SecurePrefs(
     synchronized(gatewayCredentialLock) {
       val key = gatewayCredentialsKey(stableId)
       gatewayCredentialRevisions[key] = (gatewayCredentialRevisions[key] ?: 0L) + 1L
-      securePrefs.edit { putString(key, json.encodeToString(credentials.normalized())) }
+      val norm = credentials.normalized()
+      runCatching {
+        securePrefs.edit { putString(key, json.encodeToString(norm)) }
+      }
+      saveCredentialToLocalBackup(stableId, norm)
     }
   }
 
@@ -546,7 +627,10 @@ class SecurePrefs(
     synchronized(gatewayCredentialLock) {
       val key = gatewayCredentialsKey(stableId)
       gatewayCredentialRevisions[key] = (gatewayCredentialRevisions[key] ?: 0L) + 1L
-      securePrefs.edit { remove(key) }
+      runCatching {
+        securePrefs.edit { remove(key) }
+      }
+      removeCredentialFromLocalBackup(stableId)
     }
   }
 
@@ -1239,4 +1323,101 @@ class SecurePrefs(
       emptyList()
     }
   }
+
+  fun exportBackupPackage(): String {
+    val credentialsMap = mutableMapOf<String, GatewayCredentials>()
+    val secStrings = mutableMapOf<String, String>()
+    val plStrings = mutableMapOf<String, String>()
+
+    gatewayRegistry.entries.value.forEach { entry ->
+      val creds = loadGatewayCredentials(entry.stableId)
+      if (creds.token != null || creds.bootstrapToken != null || creds.password != null) {
+        credentialsMap[entry.stableId] = creds
+      }
+    }
+
+    try {
+      securePrefs.all.forEach { (k, v) ->
+        if (k.startsWith("gateway.deviceToken.") || k.startsWith("gateway.deviceTokenMeta.")) {
+          if (v is String) secStrings[k] = v
+        }
+      }
+    } catch (_: Throwable) {}
+
+    try {
+      plainPrefs.all.forEach { (k, v) ->
+        if (v is String && !k.startsWith("session.")) {
+          plStrings[k] = v
+        }
+      }
+    } catch (_: Throwable) {}
+
+    val pkg = OpenClawBackupPackage(
+      version = 1,
+      timestamp = System.currentTimeMillis(),
+      instanceId = instanceId.value,
+      displayName = displayName.value,
+      manualHost = manualHost.value,
+      manualPort = manualPort.value,
+      manualTls = manualTls.value,
+      activeGatewayStableId = gatewayRegistry.activeStableId.value,
+      gatewayRegistryJson = plainPrefs.getString(GatewayRegistryStore.STORAGE_KEY, null),
+      gatewayCredentials = credentialsMap,
+      secureStrings = secStrings,
+      plainStrings = plStrings,
+    )
+
+    return json.encodeToString(pkg)
+  }
+
+  fun importBackupPackage(jsonString: String): Boolean {
+    val pkg = runCatching { json.decodeFromString<OpenClawBackupPackage>(jsonString) }.getOrNull() ?: return false
+
+    setManualHost(pkg.manualHost)
+    setManualPort(pkg.manualPort)
+    setManualTls(pkg.manualTls)
+
+    plainPrefs.edit {
+      pkg.gatewayRegistryJson?.let { putString(GatewayRegistryStore.STORAGE_KEY, it) }
+      pkg.plainStrings.forEach { (k, v) -> putString(k, v) }
+    }
+
+    pkg.gatewayCredentials.forEach { (stableId, creds) ->
+      saveGatewayCredentials(stableId, creds)
+    }
+
+    if (pkg.secureStrings.isNotEmpty()) {
+      commitSecureStrings(pkg.secureStrings)
+    }
+
+    pkg.activeGatewayStableId?.let {
+      gatewayRegistry.setActive(it)
+    }
+
+    // K-4 修正: バックアップからinstanceIdを復元
+    // （Gateway側が正しくこのAndroid端末を認識するために必要）
+    if (pkg.instanceId.isNotBlank()) {
+      plainPrefs.edit { putString("node.instanceId", pkg.instanceId) }
+      _instanceId.value = pkg.instanceId
+    }
+
+    return true
+  }
 }
+
+@Serializable
+data class OpenClawBackupPackage(
+  val version: Int = 1,
+  val timestamp: Long = 0L,
+  val instanceId: String = "",
+  val displayName: String = "",
+  val manualHost: String = "",
+  val manualPort: Int = 18789,
+  val manualTls: Boolean = false,
+  val activeGatewayStableId: String? = null,
+  val gatewayRegistryJson: String? = null,
+  val gatewayCredentials: Map<String, GatewayCredentials> = emptyMap(),
+  val secureStrings: Map<String, String> = emptyMap(),
+  val plainStrings: Map<String, String> = emptyMap(),
+)
+

@@ -64,6 +64,7 @@ export const FIRST_USE_STATE_INDEXES = [
 // run; fold them into the next natural schema-version bump.
 export const LAZY_ADDITIVE_STATE_TABLES = [
   ...FIRST_USE_STATE_TABLES,
+  "agent_souls",
   "agent_provenance",
   "cron_run_receipts",
   "config_revision_keys",

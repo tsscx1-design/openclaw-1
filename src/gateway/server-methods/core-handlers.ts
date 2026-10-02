@@ -161,6 +161,19 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "system-changes": () =>
     import("./system-changes.js").then((module) => module.systemChangesHandlers),
   wizard: () => import("./wizard.js").then((module) => module.wizardHandlers),
+  ollama: () => import("./ollama.js").then((module) => module.ollamaHandlers),
+  partners: () =>
+    Promise.all([import("./partners.js"), import("./partner-features.js")]).then(
+      ([base, features]) => ({
+        ...base.partnersHandlers,
+        ...features.partnerFeatureHandlers,
+      }),
+    ),
+  memories: () => import("./memories.js").then((module) => module.memoriesHandlers),
+  features: () => import("./features.js").then((module) => module.featuresHandlers),
+  backup: () => import("./backup.js").then((module) => module.backupHandlers),
+  sync: () => import("./sync.js").then((module) => module.syncHandlers),
+  specialist: () => import("./specialist.js").then((module) => module.specialistHandlers),
 } satisfies Record<CoreGatewayHandlerFamily, CoreGatewayHandlerModuleLoader>;
 
 export const coreGatewayHandlers: GatewayRequestHandlers = Object.fromEntries(

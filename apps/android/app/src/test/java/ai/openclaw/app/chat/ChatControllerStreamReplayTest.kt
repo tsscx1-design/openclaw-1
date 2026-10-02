@@ -452,6 +452,45 @@ class ChatControllerStreamReplayTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun liveReasoningStreamsBeforeAnswerAndClearsWithTheRun() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondChatSend(status = "started")
+      val controller = loadController(gateway)
+
+      assertTrue(controller.sendMessageAwaitAcceptance("Hello there", "high", emptyList()))
+      val runId = requireNotNull(gateway.lastRunId)
+
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"main","runId":"$runId","stream":"thinking","data":{"text":"Checking","delta":"Checking"}}""",
+      )
+      controller.handleGatewayEvent(
+        "agent",
+        """{"sessionKey":"main","runId":"$runId","stream":"thinking","data":{"text":"Checking the docs","delta":" the docs"}}""",
+      )
+      assertEquals("Checking the docs", controller.streamingThinkingText.value)
+      assertNull(controller.streamingAssistantText.value)
+
+      gateway.respondWith(
+        "chat.history",
+        historyResponse(
+          sessionId = "session-1",
+          messages =
+            listOf(
+              ReplayHistoryMessage("user", "Hello there", 1_000, idempotencyKey = "$runId:user"),
+              ReplayHistoryMessage("assistant", "Done.", 2_000),
+            ),
+        ),
+      )
+      controller.handleGatewayEvent("chat", chatTerminalPayload("main", runId, seq = 3, assistantText = "Done."))
+      advanceUntilIdle()
+
+      assertNull(controller.streamingThinkingText.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun cleanRunStreamsV3AndV4DeltasThenConvergesToHistoryWithoutDuplicates() =
     runTest {
       val gateway = ScriptedGateway(json)

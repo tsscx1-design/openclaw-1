@@ -9,6 +9,7 @@ import ai.openclaw.app.providerDisplayName
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawScaffold
+import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.uppercaseFirstGraphemeOrNull
@@ -33,6 +34,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -55,6 +57,7 @@ import androidx.compose.ui.unit.sp
 internal fun ProvidersModelsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
+  onOpenOllamaCatalog: () -> Unit = {},
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
   val models by viewModel.providerModelCatalog.collectAsState()
@@ -96,6 +99,13 @@ internal fun ProvidersModelsScreen(
                 color = ClawTheme.colors.textMuted,
               )
             }
+
+            ClawPrimaryButton(
+              text = nativeString("モデルカタログ＆ダウンロード・切替"),
+              onClick = onOpenOllamaCatalog,
+              modifier = Modifier.fillMaxWidth(),
+              icon = Icons.Default.Download,
+            )
           }
         }
 

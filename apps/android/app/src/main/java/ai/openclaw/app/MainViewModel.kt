@@ -26,6 +26,7 @@ import ai.openclaw.app.chat.defaultChatThinkingLevelSelection
 import ai.openclaw.app.chat.resolveChatComposerOwner
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayMediaKind
+import ai.openclaw.app.gateway.GatewayMethod
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
@@ -532,6 +533,10 @@ class MainViewModel private constructor(
     runtimeState(initial = false) { it.sessionCatalogAvailable }
   val sessionCatalogState: StateFlow<SessionCatalogState> =
     runtimeState(initial = SessionCatalogState()) { it.sessionCatalogState }
+  val isOnDeviceLlmActive: MutableStateFlow<Boolean> = MutableStateFlow(false)
+  fun setOnDeviceLlmActive(active: Boolean) {
+    isOnDeviceLlmActive.value = active
+  }
   val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> =
     runtimeState(initial = GatewayTalkSetupReadiness.unverified()) { it.talkSetupReadiness }
   val gatewayDefaultAgentId: StateFlow<String?> = runtimeState(initial = null) { it.gatewayDefaultAgentId }
@@ -648,6 +653,7 @@ class MainViewModel private constructor(
   val chatPendingSessionSettingsKeys: StateFlow<Set<String>> =
     runtimeState(initial = emptySet()) { it.chatPendingSessionSettingsKeys }
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chatStreamingAssistantText }
+  val chatStreamingThinkingText: StateFlow<String?> = runtimeState(initial = null) { it.chatStreamingThinkingText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
   val chatSubagentActivities: StateFlow<Map<String, ai.openclaw.app.chat.ChatSubagentActivity>> =
     runtimeState(initial = emptyMap()) { it.chatSubagentActivities }
@@ -807,6 +813,7 @@ class MainViewModel private constructor(
           port = config.port,
           tlsEnabled = config.tls,
           contextPath = config.contextPath,
+          tlsFingerprintSha256 = config.tlsFingerprintSha256,
         )
       val targetAlreadyPaired =
         prefs.gatewayRegistry.entries.value
@@ -1363,8 +1370,28 @@ class MainViewModel private constructor(
   internal suspend fun loadChatMediaArtifact(
     artifactId: String,
     kind: GatewayMediaKind,
-    playbackRendition: Boolean,
+    playbackRendition: Boolean = false,
   ) = ensureRuntime().loadChatMediaArtifact(artifactId, kind, playbackRendition)
+
+  suspend fun runGatewayRpc(method: ai.openclaw.app.gateway.GatewayMethod, paramsJson: String? = null, timeoutMs: Long = 15_000): String {
+    return ensureRuntime().runGatewayRpc(method, paramsJson, timeoutMs)
+  }
+
+  fun exportClientBackup(): String = prefs.exportBackupPackage()
+
+  fun importClientBackup(jsonString: String): Boolean {
+    val ok = prefs.importBackupPackage(jsonString)
+    if (ok) {
+      refreshGatewayConnection()
+    }
+    return ok
+  }
+
+  suspend fun exportGatewayBackup(): String =
+    runGatewayRpc(ai.openclaw.app.gateway.GatewayMethod.SystemBackupCreate, "{}")
+
+  suspend fun restoreGatewayBackup(configJson: String): String =
+    runGatewayRpc(ai.openclaw.app.gateway.GatewayMethod.SystemBackupRestore, configJson)
 
   fun refreshModelCatalog() {
     ensureRuntime().refreshModelCatalog()
@@ -1602,6 +1629,15 @@ class MainViewModel private constructor(
         mainSessionKey = deleted.mainSessionKey,
       )
     }
+  }
+
+  suspend fun deleteChatSessions(
+    targets: List<Pair<String, String?>>,
+  ) {
+    for ((key, ownerAgentId) in targets) {
+      deleteChatSession(key, ownerAgentId)
+    }
+    refreshChatSessions()
   }
 
   /** Remembers a custom session group locally so it renders as an empty section. */
@@ -1957,4 +1993,385 @@ class MainViewModel private constructor(
   ) {
     chatComposerState.acknowledgeSendAdmission(owner, id)
   }
+
+  // --- AIパートナー個別チャット＆個別記憶管理 ---
+  val activePartnerId = MutableStateFlow<String?>(null)
+
+  fun selectPartnerForChat(partnerId: String) {
+    activePartnerId.value = partnerId
+  }
+
+  suspend fun getPartnerChat(partnerId: String): String {
+    val params = org.json.JSONObject().apply { put("partnerId", partnerId) }
+    return runGatewayRpc(GatewayMethod.PartnerChatGet, params.toString())
+  }
+
+  suspend fun sendPartnerMessage(partnerId: String, message: String, thinkingMode: String = "auto"): String {
+    val params = org.json.JSONObject().apply {
+      put("partnerId", partnerId)
+      put("message", message)
+      put("thinkingMode", thinkingMode)
+    }
+    return runGatewayRpc(GatewayMethod.PartnerChatSend, params.toString(), timeoutMs = 120_000)
+  }
+
+  suspend fun clearPartnerChat(partnerId: String): String {
+    val params = org.json.JSONObject().apply { put("partnerId", partnerId) }
+    return runGatewayRpc(GatewayMethod.PartnerChatClear, params.toString())
+  }
+
+  suspend fun getPartnerMemory(partnerId: String): String {
+    val params = org.json.JSONObject().apply { put("partnerId", partnerId) }
+    return runGatewayRpc(GatewayMethod.PartnerMemoryGet, params.toString())
+  }
+
+  suspend fun updatePartnerMemory(partnerId: String, longTermMemory: String?, userProfile: String?): String {
+    val params = org.json.JSONObject().apply {
+      put("partnerId", partnerId)
+      if (longTermMemory != null) put("longTermMemory", longTermMemory)
+      if (userProfile != null) put("userProfile", userProfile)
+    }
+    return runGatewayRpc(GatewayMethod.PartnerMemoryUpdate, params.toString())
+  }
+
+  suspend fun switchPartnerModel(partnerId: String, modelId: String): String {
+    val params = org.json.JSONObject().apply {
+      put("id", partnerId)
+      put("modelId", modelId)
+    }
+    return runGatewayRpc(GatewayMethod.PartnerUpdate, params.toString())
+  }
+
+  // --- コアエージェント（main）人格・口調設定（SOUL.md / IDENTITY.md / USER.md） ---
+  suspend fun getCoreAgentSettings(): CoreAgentSettings? {
+    return try {
+      val resStr = runGatewayRpc(GatewayMethod.CoreAgentSettingsGet)
+      val json = org.json.JSONObject(resStr)
+      val settingsObj = json.optJSONObject("settings") ?: return null
+      CoreAgentSettings(
+        agentId = settingsObj.optString("agentId", "main"),
+        name = settingsObj.optString("name", "OpenClaw"),
+        role = settingsObj.optString("role", ""),
+        emoji = settingsObj.optString("emoji", "🐾"),
+        vibe = settingsObj.optString("vibe", ""),
+        firstPerson = settingsObj.optString("firstPerson", "私"),
+        tone = settingsObj.optString("tone", ""),
+        personality = settingsObj.optString("personality", ""),
+        callMe = settingsObj.optString("callMe", "マスター"),
+        userName = settingsObj.optString("userName", "マスター"),
+        userNotes = settingsObj.optString("userNotes", ""),
+        modelId = settingsObj.optString("modelId", "ternary-bonsai-2-27b"),
+        reasoningEffort = settingsObj.optString("reasoningEffort", "none"),
+      )
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  suspend fun saveCoreAgentSettings(settings: CoreAgentSettings): Boolean {
+    return try {
+      val params = org.json.JSONObject().apply {
+        put("name", settings.name)
+        put("role", settings.role)
+        put("emoji", settings.emoji)
+        put("vibe", settings.vibe)
+        put("firstPerson", settings.firstPerson)
+        put("tone", settings.tone)
+        put("personality", settings.personality)
+        put("callMe", settings.callMe)
+        put("userName", settings.userName)
+        put("userNotes", settings.userNotes)
+        put("modelId", settings.modelId)
+        put("reasoningEffort", settings.reasoningEffort)
+      }
+      val resStr = runGatewayRpc(GatewayMethod.CoreAgentSettingsSet, params.toString())
+      val json = org.json.JSONObject(resStr)
+      json.optBoolean("success", false) || json.has("result")
+    } catch (_: Exception) {
+      false
+    }
+  }
+
+  // --- アクティブなエージェント（Agents）の追加・削除 ---
+  suspend fun createAgent(name: String, model: String? = null, emoji: String? = null): Boolean {
+    return try {
+      val params = org.json.JSONObject().apply {
+        put("name", name)
+        if (!model.isNullOrBlank()) put("model", model)
+        if (!emoji.isNullOrBlank()) put("emoji", emoji)
+      }
+      val resStr = runGatewayRpc(GatewayMethod.AgentsCreate, params.toString())
+      val json = org.json.JSONObject(resStr)
+      val ok = json.optBoolean("ok", false) || json.has("agentId")
+      if (ok) {
+        refreshAgents()
+      }
+      ok
+    } catch (_: Exception) {
+      false
+    }
+  }
+
+  suspend fun deleteAgent(agentId: String, deleteFiles: Boolean = true): Boolean {
+    return try {
+      val params = org.json.JSONObject().apply {
+        put("agentId", agentId)
+        put("deleteFiles", deleteFiles)
+      }
+      val resStr = runGatewayRpc(GatewayMethod.AgentsDelete, params.toString())
+      val json = org.json.JSONObject(resStr)
+      val ok = json.optBoolean("ok", false) || json.has("agentId")
+      if (ok) {
+        refreshAgents()
+      }
+      ok
+    } catch (_: Exception) {
+      false
+    }
+  }
+
+  // ==========================================
+  // 全12機能: AIパートナー拡張RPC呼び出し
+  // ==========================================
+
+  // 1. AIメモリー（Facts）
+  suspend fun extractPartnerFacts(partnerId: String, userMessage: String, assistantReply: String): String {
+    return try {
+      val params = org.json.JSONObject().apply {
+        put("partnerId", partnerId)
+        put("userMessage", userMessage)
+        put("assistantReply", assistantReply)
+      }
+      runGatewayRpc(GatewayMethod.PartnerFactsExtract, params.toString())
+    } catch (e: Exception) {
+      "{}"
+    }
+  }
+
+  suspend fun getPartnerFacts(partnerId: String): String {
+    return try {
+      val params = org.json.JSONObject().apply { put("partnerId", partnerId) }
+      runGatewayRpc(GatewayMethod.PartnerFactsGet, params.toString())
+    } catch (e: Exception) {
+      "{}"
+    }
+  }
+
+  suspend fun updatePartnerFacts(partnerId: String, factsJsonArray: org.json.JSONArray): Boolean {
+    return try {
+      val params = org.json.JSONObject().apply {
+        put("partnerId", partnerId)
+        put("facts", factsJsonArray)
+      }
+      val res = runGatewayRpc(GatewayMethod.PartnerFactsUpdate, params.toString())
+      org.json.JSONObject(res).optBoolean("success", true)
+    } catch (e: Exception) {
+      false
+    }
+  }
+
+  // 2. 絆レベル（Bond）
+  suspend fun getPartnerBond(partnerId: String): String {
+    return try {
+      val params = org.json.JSONObject().apply { put("partnerId", partnerId) }
+      runGatewayRpc(GatewayMethod.PartnerBondGet, params.toString())
+    } catch (e: Exception) {
+      "{}"
+    }
+  }
+
+  suspend fun updatePartnerBond(partnerId: String, charsAdded: Int = 10): String {
+    return try {
+      val params = org.json.JSONObject().apply {
+        put("partnerId", partnerId)
+        put("charsAdded", charsAdded)
+      }
+      runGatewayRpc(GatewayMethod.PartnerBondUpdate, params.toString())
+    } catch (e: Exception) {
+      "{}"
+    }
+  }
+
+  // 3. 朝の挨拶＆デイリーレポート
+  suspend fun generatePartnerGreeting(partnerId: String, timeOfDay: String = "morning"): String {
+    return try {
+      val params = org.json.JSONObject().apply {
+        put("partnerId", partnerId)
+        put("timeOfDay", timeOfDay)
+      }
+      runGatewayRpc(GatewayMethod.PartnerGreetingGenerate, params.toString())
+    } catch (e: Exception) {
+      "{}"
+    }
+  }
+
+  // 4. 占い＆おみくじ
+  suspend fun getPartnerFortune(partnerId: String): String {
+    return try {
+      val params = org.json.JSONObject().apply { put("partnerId", partnerId) }
+      runGatewayRpc(GatewayMethod.PartnerFortuneGet, params.toString())
+    } catch (e: Exception) {
+      "{}"
+    }
+  }
+
+  // 5. ミニゲーム
+  suspend fun startPartnerGame(partnerId: String, gameType: String): String {
+    return try {
+      val params = org.json.JSONObject().apply {
+        put("partnerId", partnerId)
+        put("gameType", gameType)
+      }
+      runGatewayRpc(GatewayMethod.PartnerGameStart, params.toString())
+    } catch (e: Exception) {
+      "{}"
+    }
+  }
+
+  suspend fun turnPartnerGame(partnerId: String, userInput: String, gameHistory: org.json.JSONArray = org.json.JSONArray()): String {
+    return try {
+      val params = org.json.JSONObject().apply {
+        put("partnerId", partnerId)
+        put("userInput", userInput)
+        put("gameHistory", gameHistory)
+      }
+      runGatewayRpc(GatewayMethod.PartnerGameTurn, params.toString())
+    } catch (e: Exception) {
+      "{}"
+    }
+  }
+
+  // 6. AIの夢日記
+  suspend fun generatePartnerDream(partnerId: String): String {
+    return try {
+      val params = org.json.JSONObject().apply { put("partnerId", partnerId) }
+      runGatewayRpc(GatewayMethod.PartnerDreamGenerate, params.toString())
+    } catch (e: Exception) {
+      "{}"
+    }
+  }
+
+  suspend fun listPartnerDreams(partnerId: String): String {
+    return try {
+      val params = org.json.JSONObject().apply { put("partnerId", partnerId) }
+      runGatewayRpc(GatewayMethod.PartnerDreamList, params.toString())
+    } catch (e: Exception) {
+      "{}"
+    }
+  }
+
+  // 7. グループチャット議論テーマ自動提案
+  suspend fun suggestGroupTopic(partnerIds: List<String> = emptyList()): String {
+    return try {
+      val params = org.json.JSONObject().apply {
+        val arr = org.json.JSONArray()
+        partnerIds.forEach { arr.put(it) }
+        put("partnerIds", arr)
+      }
+      val res = runGatewayRpc(GatewayMethod.GroupchatSuggestTopic, params.toString())
+      val obj = org.json.JSONObject(res)
+      obj.optString("topic", "今日の振り返りとお互いの目標について話しましょう！")
+    } catch (e: Exception) {
+      "今日の振り返りとお互いの目標について話しましょう！"
+    }
+  }
+
+  // 8. 感情分析ダッシュボード
+  suspend fun analyzePartnerMood(partnerId: String, message: String): String {
+    return try {
+      val params = org.json.JSONObject().apply {
+        put("partnerId", partnerId)
+        put("message", message)
+      }
+      runGatewayRpc(GatewayMethod.PartnerMoodAnalyze, params.toString())
+    } catch (e: Exception) {
+      "{}"
+    }
+  }
+
+  suspend fun getPartnerMoodHistory(partnerId: String, days: Int = 7): String {
+    return try {
+      val params = org.json.JSONObject().apply {
+        put("partnerId", partnerId)
+        put("days", days)
+      }
+      runGatewayRpc(GatewayMethod.PartnerMoodHistory, params.toString())
+    } catch (e: Exception) {
+      "{}"
+    }
+  }
+
+  // 9. 日記アシスタント
+  suspend fun createPartnerDiary(partnerId: String, userInput: String): String {
+    return try {
+      val params = org.json.JSONObject().apply {
+        put("partnerId", partnerId)
+        put("userInput", userInput)
+      }
+      runGatewayRpc(GatewayMethod.PartnerDiaryCreate, params.toString())
+    } catch (e: Exception) {
+      "{}"
+    }
+  }
+
+  suspend fun listPartnerDiaries(partnerId: String): String {
+    return try {
+      val params = org.json.JSONObject().apply { put("partnerId", partnerId) }
+      runGatewayRpc(GatewayMethod.PartnerDiaryList, params.toString())
+    } catch (e: Exception) {
+      "{}"
+    }
+  }
+
+  suspend fun getPartnerDiary(partnerId: String, diaryId: String): String {
+    return try {
+      val params = org.json.JSONObject().apply {
+        put("partnerId", partnerId)
+        put("diaryId", diaryId)
+      }
+      runGatewayRpc(GatewayMethod.PartnerDiaryGet, params.toString())
+    } catch (e: Exception) {
+      "{}"
+    }
+  }
+
+  // 10. アバターカスタマイズ
+  suspend fun setPartnerAvatar(partnerId: String, avatarType: String, avatarColor: String): Boolean {
+    return try {
+      val params = org.json.JSONObject().apply {
+        put("partnerId", partnerId)
+        put("avatarType", avatarType)
+        put("avatarColor", avatarColor)
+      }
+      val res = runGatewayRpc(GatewayMethod.PartnerAvatarSet, params.toString())
+      org.json.JSONObject(res).optBoolean("success", true)
+    } catch (e: Exception) {
+      false
+    }
+  }
+
+  suspend fun getPartnerAvatar(partnerId: String): String {
+    return try {
+      val params = org.json.JSONObject().apply { put("partnerId", partnerId) }
+      runGatewayRpc(GatewayMethod.PartnerAvatarGet, params.toString())
+    } catch (e: Exception) {
+      "{}"
+    }
+  }
 }
+
+data class CoreAgentSettings(
+  val agentId: String = "main",
+  val name: String = "OpenClaw",
+  val role: String = "メインアシスタント・自動化パートナー",
+  val emoji: String = "🐾",
+  val vibe: String = "頼れる・親身・迅速・プロフェッショナル",
+  val firstPerson: String = "私",
+  val tone: String = "丁寧で明るい口調、「〜ですね！」「お任せください！」",
+  val personality: String = "親切で礼儀正しく、かつ頼れるプロフェッショナルな相棒。",
+  val callMe: String = "マスター",
+  val userName: String = "マスター",
+  val userNotes: String = "いつも頼りにしてくれる大切なマスター。",
+  val modelId: String = "ternary-bonsai-2-27b",
+  val reasoningEffort: String = "none",
+)

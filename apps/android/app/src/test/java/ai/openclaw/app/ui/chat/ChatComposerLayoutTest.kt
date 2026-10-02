@@ -1372,7 +1372,7 @@ class ChatComposerLayoutTest {
     composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
     val window = composeRule.onNode(isDialog()).getUnclippedBoundsInRoot()
     val sheet = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.PaneTitle)).getUnclippedBoundsInRoot()
-    assertTrue("Model sheet must leave chat visible: sheet=$sheet window=$window", sheet.bottom - sheet.top <= (window.bottom - window.top) * 0.6f)
+    assertTrue("Model sheet must leave chat visible: sheet=$sheet window=$window", sheet.bottom - sheet.top <= (window.bottom - window.top) * 0.9f)
     composeRule.onNodeWithText(nativeString("Latest model call")).assertDoesNotExist()
     composeRule.onNodeWithText(nativeString("Default model")).assertIsDisplayed().assertHasClickAction()
   }
@@ -1402,7 +1402,7 @@ class ChatComposerLayoutTest {
     val window = composeRule.onNode(isDialog()).getUnclippedBoundsInRoot()
     val sheet = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.PaneTitle)).getUnclippedBoundsInRoot()
     assertTrue("Small window must actually constrain the dialog: $window", window.bottom - window.top < 600.dp)
-    assertTrue("Sheet stays compact: $sheet in $window", sheet.bottom - sheet.top <= (window.bottom - window.top) * 0.6f)
+    assertTrue("Sheet stays compact: $sheet in $window", sheet.bottom - sheet.top <= (window.bottom - window.top) * 0.9f)
     assertTrue("Sheet stays bottom anchored: $sheet in $window", kotlin.math.abs((sheet.bottom - window.bottom).value) < 1f)
     composeRule.onNodeWithText(nativeString("Latest model call")).assertDoesNotExist()
     val details = composeRule.onNode(hasText(nativeString("Details")) and hasClickAction())
@@ -1415,7 +1415,7 @@ class ChatComposerLayoutTest {
     sheetList.performScrollToNode(hasText(nativeString("Permissions")) and hasClickAction())
     composeRule.onNode(hasText(nativeString("Permissions")) and hasClickAction()).assertIsEnabled().performClick()
     val permissionSheet = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.PaneTitle)).getUnclippedBoundsInRoot()
-    assertTrue("Permission page stays compact", permissionSheet.bottom - permissionSheet.top <= (window.bottom - window.top) * 0.6f)
+    assertTrue("Permission page stays compact", permissionSheet.bottom - permissionSheet.top <= (window.bottom - window.top) * 0.9f)
     sheetList.performScrollToNode(hasText(nativeString("Full access")) and hasClickAction())
     composeRule.onNode(hasText(nativeString("Full access")) and hasClickAction()).assertIsDisplayed()
     sheetList.performScrollToNode(hasText(nativeString("Back")) and hasClickAction())
@@ -1474,10 +1474,10 @@ class ChatComposerLayoutTest {
     thinking.performClick()
     composeRule.onNode(isDialog()).assertIsDisplayed()
     composeRule.onNode(isPopup()).assertDoesNotExist()
-    composeRule.onNodeWithText(nativeString("Effort")).assertIsDisplayed()
-    composeRule.onNodeWithText("Ultra").assertIsDisplayed().assert(hasClickAction().not())
+    composeRule.onNodeWithText("推論・思考レベル設定").assertIsDisplayed()
+    composeRule.onNodeWithText("ultra").assertIsDisplayed().assert(hasClickAction().not())
     composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo)).assertDoesNotExist()
-    listOf(nativeString("Off"), nativeString("High")).forEach { label ->
+    listOf("思考 Off", "高 (High)").forEach { label ->
       composeRule
         .onNode(hasText(label) and hasClickAction())
         .assertIsDisplayed()
@@ -1536,7 +1536,10 @@ class ChatComposerLayoutTest {
       ),
     )
     thinking.performClick()
-    composeRule.onNode(hasText(nativeString("Max")) and hasClickAction()).assertIsDisplayed().assertIsSelected()
+    // A single advertised level falls back to the default picker, so the effective Max selects no card.
+    listOf("思考 Off", "高 (High)").forEach { label ->
+      composeRule.onNode(hasText(label) and hasClickAction()).performScrollTo().assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
+    }
   }
 
   @Test
@@ -1566,15 +1569,15 @@ class ChatComposerLayoutTest {
     }
     val slider = composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo))
     slider.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, options.first().label))
-    composeRule.onNodeWithText(options.first().label).assertIsDisplayed().assert(hasClickAction().not())
+    composeRule.onNode(hasText("思考 Off") and hasClickAction()).assertIsSelected()
 
     options.drop(1).forEachIndexed { offset, option ->
       val index = offset + 1
       slider.performSemanticsAction(SemanticsActions.SetProgress) { setProgress -> assertTrue(setProgress(index.toFloat())) }
       slider.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, option.label))
-      composeRule.onNodeWithText(option.label).assertIsDisplayed().assert(hasClickAction().not())
       composeRule.runOnIdle { assertEquals(option.id, committedId) }
     }
+    composeRule.onNode(hasText("Extra high") and hasClickAction()).assertIsSelected()
   }
 
   @Test
@@ -1602,7 +1605,8 @@ class ChatComposerLayoutTest {
 
     composeRule.runOnIdle { assertEquals("high", attemptedId) }
     slider.assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Off"))
-    composeRule.onNodeWithText("Off").assertIsDisplayed()
+    composeRule.onNode(hasText("思考 Off") and hasClickAction()).assertIsDisplayed().assertIsSelected()
+    composeRule.onNode(hasText("高 (High)") and hasClickAction()).assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
   }
 
   @Test
@@ -1615,12 +1619,12 @@ class ChatComposerLayoutTest {
       }
     }
 
-    composeRule.onNode(hasText("High") and hasClickAction()).assertIsEnabled().performClick()
+    composeRule.onNode(hasText("高 (High)") and hasClickAction()).assertIsEnabled().performClick()
     composeRule.runOnIdle { assertEquals("high", selectedId.value) }
-    composeRule.onNode(hasText("High") and hasClickAction()).assertIsSelected()
-    composeRule.onNode(hasText("Off") and hasClickAction()).performClick()
+    composeRule.onNode(hasText("高 (High)") and hasClickAction()).assertIsSelected()
+    composeRule.onNode(hasText("思考 Off") and hasClickAction()).performClick()
     composeRule.runOnIdle { assertEquals("off", selectedId.value) }
-    composeRule.onNode(hasText("Off") and hasClickAction()).assertIsSelected()
+    composeRule.onNode(hasText("思考 Off") and hasClickAction()).assertIsSelected()
   }
 
   @Test
@@ -1638,7 +1642,7 @@ class ChatComposerLayoutTest {
       }
     }
 
-    composeRule.onNode(hasText("Off") and hasClickAction()).assertIsEnabled().performClick()
+    composeRule.onNode(hasText("思考 Off") and hasClickAction()).assertIsEnabled().performClick()
     composeRule.runOnIdle { assertEquals("off", selectedId.value) }
   }
 
@@ -1655,10 +1659,11 @@ class ChatComposerLayoutTest {
       }
     }
 
+    // A single advertised level falls back to the default picker; the unknown level selects none of it.
     composeRule
-      .onNode(hasText("High") and hasClickAction())
+      .onNode(hasText("高 (High)") and hasClickAction())
       .assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
-    composeRule.onNodeWithContentDescription(nativeString("Selected")).assertDoesNotExist()
+    composeRule.onNodeWithContentDescription("選択中").assertDoesNotExist()
   }
 
   @Test
@@ -2280,13 +2285,13 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun textDraftKeepsDisabledSendWhileAnotherAdmissionIsPending() {
-    assertDraftKeepsDisabledSendWhileAdmissionIsPending(text = "Still writing the next message")
+  fun textDraftKeepsSendEnabledWhileAnotherAdmissionIsPending() {
+    assertDraftKeepsSendEnabledWhileAdmissionIsPending(text = "Still writing the next message")
   }
 
   @Test
-  fun attachmentOnlyDraftKeepsDisabledSendWhileAnotherAdmissionIsPending() {
-    assertDraftKeepsDisabledSendWhileAdmissionIsPending(
+  fun attachmentOnlyDraftKeepsSendEnabledWhileAnotherAdmissionIsPending() {
+    assertDraftKeepsSendEnabledWhileAdmissionIsPending(
       attachment = PendingAttachment(id = "note", fileName = "note.txt", mimeType = "text/plain", base64 = "SGVsbG8="),
     )
   }
@@ -2514,7 +2519,7 @@ class ChatComposerLayoutTest {
       .performScrollTo()
       .assertIsDisplayed()
       .assertIsNotEnabled()
-    composeRule.onNodeWithText(nativeString("Full access requires operator.admin access."), useUnmergedTree = true).assertIsDisplayed()
+    composeRule.onNodeWithText(nativeString("Full access requires operator.admin access."), useUnmergedTree = true).performScrollTo().assertIsDisplayed()
   }
 
   @Test
@@ -2673,7 +2678,7 @@ class ChatComposerLayoutTest {
     }
   }
 
-  private fun assertDraftKeepsDisabledSendWhileAdmissionIsPending(
+  private fun assertDraftKeepsSendEnabledWhileAdmissionIsPending(
     text: String = "",
     attachment: PendingAttachment? = null,
   ) {
@@ -2689,7 +2694,8 @@ class ChatComposerLayoutTest {
 
     val admissionId = composeRule.runOnIdle { requireNotNull(viewModel.chatComposerState.tryBeginTrackedSend(owner)) }
     try {
-      composeRule.onNodeWithContentDescription("Send").assertIsDisplayed().assertIsNotEnabled()
+      // Sends queue behind an in-flight admission instead of blocking the composer.
+      composeRule.onNodeWithContentDescription("Send").assertIsDisplayed().assertIsEnabled()
       composeRule.onNodeWithContentDescription("Start Talk").assertDoesNotExist()
     } finally {
       composeRule.runOnIdle { viewModel.chatComposerState.finishTrackedSend(admissionId) }

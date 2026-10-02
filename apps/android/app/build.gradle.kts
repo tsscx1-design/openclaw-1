@@ -335,6 +335,7 @@ dependencies {
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.compose.material3)
+  implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
   // material-icons-extended pulled in full icon set (~20 MB DEX). Only ~18 icons used.
   // R8 will tree-shake unused icons when minify is enabled on release builds.
   implementation(libs.androidx.compose.material.icons.extended)
@@ -452,7 +453,8 @@ val generateMermaidAssets =
   tasks.register<Exec>("generateMermaidAssets") {
     val repositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
     workingDir(repositoryRoot)
-    commandLine("pnpm", "--dir", "packages/mermaid-renderer", "build")
+    val isWindows = org.gradle.internal.os.OperatingSystem.current().isWindows
+    commandLine(if (isWindows) "pnpm.cmd" else "pnpm", "--dir", "packages/mermaid-renderer", "build")
     inputs
       .files(
         fileTree(repositoryRoot.resolve("packages/mermaid-renderer")) {
