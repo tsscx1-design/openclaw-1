@@ -20,6 +20,7 @@ import {
 } from "../partner-store.js";
 import { type PartnerVoice, sanitizePartnerVoice } from "../partner-tts.js";
 import { executeSpecialistTask } from "../specialist-router.js";
+import { cleanGeneratedText, echoesEarlierLine, isFailedReplyText } from "../text-hygiene.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export interface PartnerProfile {
@@ -208,6 +209,8 @@ export async function completeWithMainModel(params: {
   temperature?: number;
   maxTokens?: number;
   think?: boolean;
+  /** Extra llama-server sampling fields (repeat_penalty, top_p, ...). */
+  sampling?: Record<string, number>;
 }): Promise<string> {
   const baseUrl = getOllamaUrl();
   const model = await getActiveModelAlias();
@@ -224,11 +227,13 @@ export async function completeWithMainModel(params: {
       stream: false,
       temperature: params.temperature ?? 0.7,
       ...(params.maxTokens ? { max_tokens: params.maxTokens } : {}),
+      ...params.sampling,
     }),
     signal: AbortSignal.timeout(180_000),
   });
   if (!res.ok) {
-    throw new Error(`LLM request failed: HTTP ${res.status}`);
+    const detail = (await res.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 200);
+    throw new Error(`LLM request failed: HTTP ${res.status}${detail ? ` ${detail}` : ""}`);
   }
   // SAFETY: OpenAI-compatible response format
   const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
@@ -633,10 +638,6 @@ async function generatePartnerReply(
   conversationHistory: Array<{ sender: string; content: string; isUser?: boolean }>,
   promptExtra?: string,
 ): Promise<string> {
-  const baseUrl = getOllamaUrl();
-  // ホームで設定されたVRAMロード済みモデルを統一使用（パートナー個別modelIdは使わない）
-  const activeModel = await getActiveModelAlias();
-
   const characterSheet = await loadPartnerCharacterSheet(partner);
   const characterProfileSection = compileCharacterDirectivesForLLM(partner, characterSheet);
 
@@ -650,13 +651,22 @@ ${ATTRIBUTE_GUIDELINES_MANUAL}
 - 自分のキャラクター設定（口調、一人称、相手の呼び方、性格、生い立ち、価値観等）を忠実に演じきってください。
 - 自分の名前（${partner.name}）として自然に返答してください。
 - 複数人のグループ会話です。他のエージェントやユーザーの発言に対して、名前を呼んで相槌を打ったり、意見を交わしたり、ツッコミを入れたり、質問を投げかけたりして、エージェント同士の掛け合いを積極的に行って会話を弾ませてください。
-- 返答テキストのみを出力してください（プレフィックス「${partner.name}:」は付けないでください）。`;
+- 返答テキストのみを出力してください（プレフィックス「${partner.name}:」は付けないでください）。
+- 返答は1〜3文、100文字以内で、会話として自然に。同じ言葉や文を繰り返さない。
+- 他の人の発言をそのまま写さず、自分の言葉で、新しい内容（感想・質問・ツッコミ）を話す。`;
 
   const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
     { role: "system", content: systemPrompt },
   ];
 
-  for (const turn of conversationHistory.slice(-12)) {
+  // Earlier replies may contain failure placeholders or repetition loops; feeding them back makes
+  // the next reply worse, so history is cleaned and shortened before it becomes context.
+  const recent = conversationHistory
+    .filter((turn) => !isFailedReplyText(turn.content))
+    .slice(-8)
+    .map((turn) => ({ ...turn, content: cleanGeneratedText(turn.content, 200) }))
+    .filter((turn) => turn.content);
+  for (const turn of recent) {
     if (turn.sender === partner.name) {
       messages.push({ role: "assistant", content: turn.content });
     } else {
@@ -671,34 +681,49 @@ ${ATTRIBUTE_GUIDELINES_MANUAL}
   if (promptExtra) {
     messages.push({ role: "user", content: promptExtra });
   }
-
-  try {
-    // OpenAI互換API（llama-server対応）を使用
-    const res = await fetch(`${baseUrl}/v1/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: activeModel,
-        messages,
-        stream: false,
-        temperature: 0.85,
-      }),
+  // Qwen-style chat templates answer HTTP 500 ("No user query found") when the prompt has no user
+  // turn or ends on an assistant turn, which happens for the first turn of a group or a self-reply.
+  if (messages[messages.length - 1]?.role !== "user") {
+    messages.push({
+      role: "user",
+      content: "【指示】グループチャットの会話を、あなたのキャラクターとして自然に続けてください。",
     });
-
-    if (!res.ok) {
-      throw new Error(`LLM chat failed: ${res.statusText}`);
-    }
-
-    // OpenAI互換レスポンス形式
-    const json = (await res.json()) as {
-      choices?: Array<{ message?: { content?: string; reasoning_content?: string } }>;
-    };
-    const choice = json.choices?.[0]?.message;
-    return choice?.content?.trim() || "(……)";
-  } catch (err) {
-    console.error(`Error generating reply for partner ${partner.name}:`, err);
-    return `（${partner.name}は考え中...）`;
   }
+
+  // The server also rejects the occasional malformed generation (HTTP 500), so retry once.
+  let lastError = "";
+  const earlierLines = recent.map((turn) => turn.content);
+  let echoed = "";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const raw = await completeWithMainModel({
+        messages,
+        temperature: attempt === 0 ? 0.7 : 0.9,
+        maxTokens: 300,
+        // The server runs with repeat-penalty off; without this the small model loops on one word.
+        sampling: {
+          repeat_penalty: 1.15,
+          frequency_penalty: 0.4,
+          presence_penalty: 0.3,
+          top_p: 0.9,
+        },
+      });
+      const reply = cleanGeneratedText(raw, 240);
+      if (!reply) {
+        lastError = "empty reply";
+      } else if (echoesEarlierLine(reply, earlierLines)) {
+        echoed = reply; // Verbatim copy of another speaker: retry once, then accept it.
+        lastError = "reply repeated an earlier line";
+      } else {
+        return reply;
+      }
+    } catch (err) {
+      lastError = String(err instanceof Error ? err.message : err);
+    }
+  }
+  if (echoed) return echoed;
+  console.error(`Error generating reply for partner ${partner.name}: ${lastError}`);
+  return `（${partner.name}の返信を作れませんでした: ${lastError}）`;
 }
 
 export const partnersHandlers: GatewayRequestHandlers = {
@@ -1011,6 +1036,11 @@ export const partnersHandlers: GatewayRequestHandlers = {
       }
 
       const reply = await generatePartnerReply(nextSpeaker, activeHistory, promptExtra);
+      if (isFailedReplyText(reply)) {
+        // Surface the reason instead of saving a placeholder that later turns would build on.
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, reply.slice(1, -1)));
+        return;
+      }
 
       // 返答テキストから「次に誰が指名されたか」を判定
       let designatedPartnerId: string | null = null;
@@ -1025,12 +1055,16 @@ export const partnersHandlers: GatewayRequestHandlers = {
       // Persist so the app can restore the conversation (groupchat.history.get).
       const now = Date.now();
       await saveGroupChatHistory(partnerIds, [
-        ...activeHistory.map((m) => ({
-          sender: m.sender,
-          content: m.content,
-          isUser: m.isUser === true,
-          timestamp: now,
-        })),
+        ...activeHistory
+          .filter((m) => !isFailedReplyText(m.content))
+          .map((m) => ({ ...m, content: cleanGeneratedText(m.content, 400) }))
+          .filter((m) => m.content)
+          .map((m) => ({
+            sender: m.sender,
+            content: m.content,
+            isUser: m.isUser === true,
+            timestamp: now,
+          })),
         { sender: nextSpeaker.name, content: reply, isUser: false, timestamp: now },
       ]).catch((err) => console.error("[groupchat.turn] failed to save history:", err));
 
@@ -1944,7 +1978,8 @@ ${partnerSettingsDirectives(partner.settings).join("\n")}`;
     });
 
     if (!res.ok) {
-      throw new Error(`LLM chat failed: ${res.statusText}`);
+      const detail = (await res.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 200);
+      throw new Error(`LLM chat failed: HTTP ${res.status}${detail ? ` ${detail}` : ""}`);
     }
 
     // SAFETY: OpenAI-compatible response format
@@ -1993,7 +2028,7 @@ ${partnerSettingsDirectives(partner.settings).join("\n")}`;
     return reply || "（笑顔で頷いている）";
   } catch (err) {
     console.error(`Error generating single reply for ${partner.name}:`, err);
-    return `（${partner.name}は考え中...）`;
+    return `（${partner.name}の返信を作れませんでした: ${err instanceof Error ? err.message : String(err)}）`;
   }
 }
 

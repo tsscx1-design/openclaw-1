@@ -287,6 +287,11 @@ internal fun SettingsDetailScreen(
       partnerId = rememberSettingsPartnerId(viewModel),
       onBack = onBack,
     )
+    SettingsRoute.PartnerAlbum -> PartnerAlbumScreen(
+      viewModel = viewModel,
+      partnerId = rememberSettingsPartnerId(viewModel),
+      onBack = onBack,
+    )
     SettingsRoute.MiniGame -> MiniGameScreen(
       viewModel = viewModel,
       partnerId = rememberSettingsPartnerId(viewModel),

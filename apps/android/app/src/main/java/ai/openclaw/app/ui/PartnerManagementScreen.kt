@@ -104,6 +104,9 @@ internal fun PartnerManagementScreen(
   var editingPartnerId by remember { mutableStateOf<String?>(null) }
   var formName by remember { mutableStateOf("") }
   var formAvatarUrl by remember { mutableStateOf("") }
+  var formAvatarPrompt by remember { mutableStateOf("") }
+  var avatarGenStatus by remember { mutableStateOf("") }
+  var avatarGenerating by remember { mutableStateOf(false) }
   var formPersona by remember { mutableStateOf("") }
   var formModelId by remember { mutableStateOf("ternary-bonsai-2-27b") }
   var formReasoningEffort by remember { mutableStateOf("none") }
@@ -129,6 +132,53 @@ internal fun PartnerManagementScreen(
       val b64 = convertUriToBase64DataUrl(context, it)
       if (b64 != null) {
         formAvatarUrl = b64
+      }
+    }
+  }
+
+  // Generates an avatar on the PC (CPU, a few minutes) and polls until the image is ready.
+  fun generateAvatar() {
+    if (avatarGenerating) return
+    val description = formAvatarPrompt.trim().ifBlank { formPersona.trim().take(300) }
+    coroutineScope.launch {
+      avatarGenerating = true
+      avatarGenStatus = "PCで画像を作っています…（数分かかります。画面を閉じても大丈夫です）"
+      try {
+        val start = JSONObject(
+          viewModel.runGatewayRpc(
+            GatewayMethod.PartnerAvatarGenerate,
+            JSONObject().put("description", description).toString(),
+          ),
+        )
+        val jobId = start.optString("jobId")
+        val deadline = System.currentTimeMillis() + 20 * 60_000L
+        while (System.currentTimeMillis() < deadline) {
+          kotlinx.coroutines.delay(5_000)
+          val res = JSONObject(
+            viewModel.runGatewayRpc(
+              GatewayMethod.PartnerAvatarGenerateStatus,
+              JSONObject().put("jobId", jobId).toString(),
+            ),
+          )
+          when (res.optString("status")) {
+            "done" -> {
+              formAvatarUrl = res.optString("imageDataUri")
+              avatarGenStatus = "できました（${res.optInt("durationSec")}秒）。気に入らなければもう一度押すと別の絵になります。保存すると反映されます。"
+              return@launch
+            }
+            "error" -> {
+              avatarGenStatus = "作れませんでした: ${res.optString("error")}"
+              return@launch
+            }
+          }
+        }
+        avatarGenStatus = "時間がかかりすぎたため中断しました。"
+      } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+      } catch (e: Exception) {
+        avatarGenStatus = "画像生成エラー: ${e.message}"
+      } finally {
+        avatarGenerating = false
       }
     }
   }
@@ -611,6 +661,29 @@ internal fun PartnerManagementScreen(
                   )
                 }
               }
+            }
+
+            Text(
+              text = "AIで画像を作る（見た目のメモ。空ならペルソナから作ります）",
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted
+            )
+            ClawTextField(
+              value = formAvatarPrompt,
+              onValueChange = { formAvatarPrompt = it },
+              placeholder = "例: 銀髪ショート、青い目、黒いパーカー、クールな表情",
+              modifier = Modifier.fillMaxWidth()
+            )
+            ClawSecondaryButton(
+              text = if (avatarGenerating) "作成中…" else "✨ AIでアバターを作る",
+              onClick = { generateAvatar() }
+            )
+            if (avatarGenStatus.isNotBlank()) {
+              Text(
+                text = avatarGenStatus,
+                style = ClawTheme.type.caption.copy(fontSize = 11.5.sp),
+                color = ClawTheme.colors.textMuted
+              )
             }
 
             Text(

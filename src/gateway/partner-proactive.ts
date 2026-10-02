@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createWebSearchTool } from "../agents/tools/web-tools.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadDailySettings, runDailyMessages } from "./partner-daily.js";
 import {
   localDateKey,
   partnerFile,
@@ -91,6 +92,8 @@ export function chooseProactiveReason(params: {
   state: ProactiveState;
   lastChatAt?: number;
   birthday?: { month: number; day: number };
+  /** The partner already sends a scheduled morning greeting (see partner-daily.ts). */
+  skipMorning?: boolean;
 }): ProactiveReason | undefined {
   const { now, state } = params;
   const hour = now.getHours();
@@ -104,7 +107,7 @@ export function chooseProactiveReason(params: {
   ) {
     return "birthday";
   }
-  if (hour < 10 && state.lastBriefDate !== today) return "morning";
+  if (!params.skipMorning && hour < 10 && state.lastBriefDate !== today) return "morning";
   const quietFor = now.getTime() - (params.lastChatAt ?? 0);
   const sinceLastPing = now.getTime() - (state.lastSentAt ?? 0);
   if (params.lastChatAt && quietFor >= CHECKIN_AFTER_MS && sinceLastPing >= CHECKIN_AFTER_MS)
@@ -221,6 +224,19 @@ async function checkPcHealthAlert(now: Date): Promise<void> {
   );
 }
 
+/** Appends a message to the partner's chat and pushes it to the phone. */
+async function deliverToChat(partner: PartnerProfile, message: string): Promise<void> {
+  const history = await loadPartnerChatHistory(partner.id);
+  history.push({
+    id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    role: "assistant",
+    content: message,
+    timestamp: Date.now(),
+  });
+  await savePartnerChatHistory(partner.id, history.slice(-100));
+  await notifyPhones(partner.name, message);
+}
+
 export async function runPartnerProactiveTick(now = new Date()): Promise<void> {
   if (ticking) return;
   ticking = true;
@@ -237,7 +253,14 @@ export async function runPartnerProactiveTick(now = new Date()): Promise<void> {
           : (project.error ?? "").slice(0, 200),
       );
     }).catch((err) => console.error("[voice-studio] training tick failed:", err));
-    const partners = (await listPartnerProfiles()).filter((p) => p.settings?.proactive === true);
+    const allPartners = await listPartnerProfiles();
+    await runDailyMessages({
+      now,
+      partners: allPartners,
+      loadBrief: loadOrBuildDailyBrief,
+      deliver: deliverToChat,
+    });
+    const partners = allPartners.filter((p) => p.settings?.proactive === true);
     for (const partner of partners) {
       const statePath = partnerFile(partner.id, "proactive.json");
       const state = await readJsonFile<ProactiveState>(statePath, {});
@@ -247,6 +270,7 @@ export async function runPartnerProactiveTick(now = new Date()): Promise<void> {
         state,
         lastChatAt: history.at(-1)?.timestamp,
         birthday: birthdayFromFacts(await loadPartnerFacts(partner.id)),
+        skipMorning: (await loadDailySettings(partner.id)).greetingEnabled,
       });
       if (!reason) continue;
       const message = (await composeProactiveMessage(partner, reason)).trim();

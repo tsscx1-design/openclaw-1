@@ -1711,6 +1711,11 @@ private fun SettingsShellScreen(
             status = isConnected,
           ),
           SettingsRow(
+            SettingsRoute.PartnerAlbum,
+            nativeText("写真を見せて感想をもらう"),
+            status = isConnected,
+          ),
+          SettingsRow(
             SettingsRoute.MiniGame,
             nativeText("しりとり・クイズ・創作"),
             status = isConnected,

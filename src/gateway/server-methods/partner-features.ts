@@ -2,7 +2,31 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
+import {
+  getAvatarJob,
+  imageStudioStatus,
+  sanitizeImagePrompt,
+  startAvatarJob,
+} from "../image-studio.js";
 import { parseJsonObject } from "../llm-json.js";
+import {
+  addAlbumPhoto,
+  deleteAlbumPhoto,
+  describePhoto,
+  isValidAlbumItemId,
+  listAlbum,
+  readAlbumPhoto,
+  updateAlbumItem,
+  visionReady,
+  type AlbumItem,
+} from "../partner-album.js";
+import {
+  getTodaysFortune,
+  loadDailySettings,
+  saveDailySettings,
+  speakAs,
+  weekdayJa,
+} from "../partner-daily.js";
 import { ensurePartnerProactiveLoop, loadOrBuildDailyBrief } from "../partner-proactive.js";
 import { clip, generatePartnerSheet, workerSheetCompletion } from "../partner-sheet-generator.js";
 import { buildPartnerSheetMarkdown, parsePartnerSheet } from "../partner-sheet-schema.js";
@@ -24,6 +48,7 @@ import {
 } from "../partner-store.js";
 import { listTtsSpeakers, sanitizePartnerVoice, synthesizeSpeech } from "../partner-tts.js";
 import { executeSpecialistTask } from "../specialist-router.js";
+import { cleanGeneratedText, isFailedReplyText } from "../text-hygiene.js";
 import {
   appendVoiceUpload,
   createVoiceProject,
@@ -107,28 +132,67 @@ async function inCharacter(
   instruction: string,
   options?: { maxTokens?: number; temperature?: number },
 ) {
-  const system = `あなたは「${partner.name}」です。以下のキャラクター設定を守り、その口調で書いてください。\n\n${await buildPartnerCharacterPrompt(partner)}`;
-  return await completeWithMainModel({
-    messages: [
-      { role: "system", content: system },
-      { role: "user", content: instruction },
-    ],
-    temperature: options?.temperature ?? 0.8,
-    maxTokens: options?.maxTokens ?? 600,
-  });
+  return await speakAs(partner, instruction, options);
 }
 
-function weekdayJa(date = new Date()): string {
-  return ["日", "月", "火", "水", "木", "金", "土"][date.getDay()] ?? "";
-}
+const AVATAR_FALLBACK_PROMPT = "1girl, smile, short hair, school uniform";
 
-/** Stable per-day pseudo random so the fortune does not change on every refresh. */
-function seededPick<T>(items: readonly T[], seed: string): T {
-  let hash = 2166136261;
-  for (const ch of seed) {
-    hash = Math.imul(hash ^ ch.charCodeAt(0), 16777619);
+/**
+ * Turns a free-form (Japanese) appearance note into English Stable Diffusion tags. Only visual
+ * traits are used, never names, so no real person's likeness is requested.
+ */
+async function buildAvatarImagePrompt(description: string): Promise<string> {
+  if (!description) return AVATAR_FALLBACK_PROMPT;
+  try {
+    const tags = await completeWithMainModel({
+      messages: [
+        {
+          role: "system",
+          content:
+            "You write Stable Diffusion prompts. Convert the user's character appearance note into 8-20 comma-separated English danbooru-style tags (gender/count, hair color and style, eye color, clothing, accessories, expression, mood). Describe only generic visual traits of an original character: omit every personal name, work title and brand. Output only the tags, nothing else.",
+        },
+        { role: "user", content: description },
+      ],
+      temperature: 0.3,
+      maxTokens: 160,
+    });
+    const cleaned = sanitizeImagePrompt(tags.replace(/[^\x20-\x7E]/g, " "));
+    return cleaned.length >= 8 ? cleaned : AVATAR_FALLBACK_PROMPT;
+  } catch {
+    return AVATAR_FALLBACK_PROMPT;
   }
-  return items[Math.abs(hash) % items.length] as T;
+}
+
+// Photo captioning runs one at a time: the vision worker is a CPU model and slow.
+let albumCaptionChain: Promise<unknown> = Promise.resolve();
+
+function queueAlbumCaption(partner: PartnerProfile, itemId: string, imageDataUri: string): void {
+  albumCaptionChain = albumCaptionChain
+    .then(async () => {
+      try {
+        const caption = await describePhoto(imageDataUri);
+        let comment = "";
+        try {
+          comment = clip(
+            await inCharacter(
+              partner,
+              `ユーザーが写真を見せてくれました。写真の内容: ${caption}\nこの写真を見た感想を、あなたの口調で1〜2文で短く伝えてください。`,
+              { maxTokens: 200 },
+            ),
+            300,
+          );
+        } catch {
+          // The description alone is still useful when the main model is busy.
+        }
+        await updateAlbumItem(partner.id, itemId, { caption, comment, captionStatus: "done" });
+      } catch (err) {
+        await updateAlbumItem(partner.id, itemId, {
+          captionStatus: "error",
+          captionError: String(err instanceof Error ? err.message : err).slice(0, 300),
+        });
+      }
+    })
+    .catch(() => undefined);
 }
 
 // ---------- Main chat partner (persona overlay for the core agent) ----------
@@ -439,43 +503,30 @@ export const partnerFeatureHandlers: GatewayRequestHandlers = {
   "partner.fortune.get": guarded(async (params, respond) => {
     const partner = await requirePartner(params, respond);
     if (!partner) return;
-    const today = localDateKey();
-    const cachePath = partnerFile(partner.id, "fortune.json");
-    const cached = await readJsonFile<{ date?: string; fortune?: Record<string, string> }>(
-      cachePath,
-      {},
+    respond(
+      true,
+      { partnerName: partner.name, fortune: await getTodaysFortune(partner) },
+      undefined,
     );
-    if (cached.date === today && cached.fortune) {
-      respond(true, { partnerName: partner.name, fortune: cached.fortune }, undefined);
-      return;
-    }
-    const seed = `${partner.id}:${today}`;
-    const luck = seededPick(["大吉", "中吉", "小吉", "吉", "末吉", "凶"] as const, `${seed}:luck`);
-    const item = seededPick(
-      [
-        "ハンカチ",
-        "温かい飲み物",
-        "お気に入りのペン",
-        "イヤホン",
-        "手帳",
-        "飴玉",
-        "腕時計",
-        "観葉植物",
-      ] as const,
-      `${seed}:item`,
+  }),
+  "partner.daily.get": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    respond(
+      true,
+      { partnerName: partner.name, settings: await loadDailySettings(partner.id) },
+      undefined,
     );
-    const color = seededPick(
-      ["赤", "青", "緑", "黄色", "白", "紫", "オレンジ", "ピンク", "水色"] as const,
-      `${seed}:color`,
-    );
-    const message = await inCharacter(
-      partner,
-      `今日のユーザーの運勢は「${luck}」、ラッキーアイテムは「${item}」、ラッキーカラーは「${color}」です。これを伝える占いのメッセージを2文で書いてください。凶でも前向きな助言で締めること。文章だけを出力。`,
-      { maxTokens: 160 },
-    );
-    const fortune = { luck, item, color, message };
-    await writeJsonFile(cachePath, { date: today, fortune });
-    respond(true, { partnerName: partner.name, fortune }, undefined);
+  }),
+  "partner.daily.set": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    const current = await loadDailySettings(partner.id);
+    const settings = await saveDailySettings(partner.id, {
+      ...current,
+      ...(params.settings as object),
+    });
+    respond(true, { partnerName: partner.name, settings }, undefined);
   }),
 
   // --- ミニゲーム ---
@@ -561,7 +612,12 @@ ${recent || "（まだ会話が少ない）"}`,
       fail(respond, "partnerIds must be a non-empty array");
       return;
     }
-    respond(true, { history: await loadGroupChatHistory(ids) }, undefined);
+    // Heals histories saved before repetition loops and placeholders were filtered out.
+    const history = (await loadGroupChatHistory(ids))
+      .filter((m) => !isFailedReplyText(m.content))
+      .map((m) => ({ ...m, content: cleanGeneratedText(m.content, 400) }))
+      .filter((m) => m.content);
+    respond(true, { history }, undefined);
   }),
   "groupchat.history.clear": guarded(async (params, respond) => {
     const ids = (Array.isArray(params.partnerIds) ? params.partnerIds : []).filter(
@@ -724,6 +780,106 @@ ${userInput.slice(0, 2000)}`,
       return;
     }
     await writeJsonFile(partnerFile(partner.id, "avatar.json"), { avatarType, avatarColor });
+    respond(true, { success: true }, undefined);
+  }),
+
+  "partner.avatar.status": guarded(async (_params, respond) => {
+    respond(true, await imageStudioStatus(), undefined);
+  }),
+  // Starts a background image job; the app polls partner.avatar.generate.status for the result.
+  "partner.avatar.generate": guarded(async (params, respond) => {
+    const description = (str(params, "description") ?? "").slice(0, 400);
+    const prompt = await buildAvatarImagePrompt(description);
+    try {
+      const job = await startAvatarJob(prompt);
+      respond(true, { jobId: job.id, status: job.status, prompt: job.prompt }, undefined);
+    } catch (err) {
+      fail(respond, String(err instanceof Error ? err.message : err), ErrorCodes.UNAVAILABLE);
+    }
+  }),
+  "partner.avatar.generate.status": guarded(async (params, respond) => {
+    const jobId = str(params, "jobId");
+    const job = jobId ? getAvatarJob(jobId) : undefined;
+    if (!job) {
+      fail(respond, "Image job not found (it may have expired)");
+      return;
+    }
+    respond(
+      true,
+      {
+        jobId: job.id,
+        status: job.status,
+        durationSec: job.durationSec,
+        error: job.error,
+        imageDataUri: job.status === "done" ? job.imageDataUri : undefined,
+      },
+      undefined,
+    );
+  }),
+
+  // --- 写真アルバム ---
+  "partner.album.status": guarded(async (_params, respond) => {
+    respond(true, await visionReady(), undefined);
+  }),
+  "partner.album.list": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    respond(true, { partnerName: partner.name, items: await listAlbum(partner.id) }, undefined);
+  }),
+  "partner.album.add": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    const imageDataUri = str(params, "imageDataUri");
+    if (!imageDataUri) {
+      fail(respond, "imageDataUri is required");
+      return;
+    }
+    let item: AlbumItem;
+    try {
+      item = await addAlbumPhoto(partner.id, imageDataUri);
+    } catch (err) {
+      fail(respond, String(err instanceof Error ? err.message : err));
+      return;
+    }
+    queueAlbumCaption(partner, item.id, imageDataUri);
+    respond(true, { item }, undefined);
+  }),
+  "partner.album.get": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    const itemId = params.itemId;
+    const photo = isValidAlbumItemId(itemId) ? await readAlbumPhoto(partner.id, itemId) : undefined;
+    if (!photo) {
+      fail(respond, "Photo not found");
+      return;
+    }
+    respond(true, photo, undefined);
+  }),
+  "partner.album.recaption": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    const itemId = params.itemId;
+    const photo = isValidAlbumItemId(itemId) ? await readAlbumPhoto(partner.id, itemId) : undefined;
+    if (!photo) {
+      fail(respond, "Photo not found");
+      return;
+    }
+    await updateAlbumItem(partner.id, photo.item.id, {
+      captionStatus: "pending",
+      captionError: undefined,
+    });
+    queueAlbumCaption(partner, photo.item.id, photo.imageDataUri);
+    respond(true, { success: true }, undefined);
+  }),
+  "partner.album.delete": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    const itemId = params.itemId;
+    const removed = isValidAlbumItemId(itemId) ? await deleteAlbumPhoto(partner.id, itemId) : false;
+    if (!removed) {
+      fail(respond, "Photo not found");
+      return;
+    }
     respond(true, { success: true }, undefined);
   }),
 

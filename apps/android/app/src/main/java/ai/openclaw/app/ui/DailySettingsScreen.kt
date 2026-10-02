@@ -1,10 +1,12 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.gateway.GatewayMethod
 import ai.openclaw.app.ui.design.ClawIconButton
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
+import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.material3.Switch
 import androidx.compose.foundation.background
@@ -41,6 +43,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -51,11 +54,13 @@ internal fun DailySettingsScreen(
   onBack: () -> Unit,
 ) {
   val coroutineScope = rememberCoroutineScope()
-  var greetingEnabled by remember { mutableStateOf(true) }
+  // The server keeps these off until saved here; they are loaded from the Gateway below.
+  var greetingEnabled by remember { mutableStateOf(false) }
   var fortuneEnabled by remember { mutableStateOf(true) }
   var greetingTime by remember { mutableStateOf("07:30") }
-  var nightGreetingEnabled by remember { mutableStateOf(true) }
+  var nightGreetingEnabled by remember { mutableStateOf(false) }
   var nightGreetingTime by remember { mutableStateOf("22:00") }
+  var settingsStatus by remember { mutableStateOf("") }
 
   var partnerName by remember { mutableStateOf("AIパートナー") }
   var isGeneratingGreeting by remember { mutableStateOf(false) }
@@ -63,6 +68,36 @@ internal fun DailySettingsScreen(
 
   var isGettingFortune by remember { mutableStateOf(false) }
   var fortuneResult by remember { mutableStateOf<JSONObject?>(null) }
+
+  fun isValidTime(value: String): Boolean = Regex("^([01]\\d|2[0-3]):[0-5]\\d$").matches(value)
+
+  // Saves the current switches/times on the PC; the PC sends the messages at those times.
+  fun saveDailySettings() {
+    val pid = partnerId ?: return
+    if (!isValidTime(greetingTime) || !isValidTime(nightGreetingTime)) {
+      settingsStatus = "時刻は 07:30 のように、24時間表記で入力してください。"
+      return
+    }
+    coroutineScope.launch {
+      try {
+        val settings = JSONObject()
+          .put("greetingEnabled", greetingEnabled)
+          .put("greetingTime", greetingTime)
+          .put("nightEnabled", nightGreetingEnabled)
+          .put("nightTime", nightGreetingTime)
+          .put("fortuneWithGreeting", fortuneEnabled)
+        viewModel.runGatewayRpc(
+          GatewayMethod.PartnerDailySet,
+          JSONObject().put("partnerId", pid).put("settings", settings).toString(),
+        )
+        settingsStatus = "保存しました。PCが指定の時刻にスマホへ通知します。"
+      } catch (e: CancellationException) {
+        throw e
+      } catch (e: Exception) {
+        settingsStatus = "保存できませんでした: ${e.message}"
+      }
+    }
+  }
 
   fun fetchSampleGreeting() {
     val pid = partnerId ?: return
@@ -74,7 +109,7 @@ internal fun DailySettingsScreen(
         partnerName = obj.optString("partnerName", "AIパートナー")
         sampleGreeting = obj.optString("greeting", "おはようございます！今日も一日、素敵な日になりますように！")
       } catch (e: Exception) {
-        sampleGreeting = "おはようございます！今日も一日一緒に頑張りましょうね！"
+        sampleGreeting = "挨拶を作れませんでした: ${e.message}"
       } finally {
         isGeneratingGreeting = false
       }
@@ -97,6 +132,23 @@ internal fun DailySettingsScreen(
   }
 
   LaunchedEffect(partnerId) {
+    val pid = partnerId ?: return@LaunchedEffect
+    try {
+      val res = JSONObject(
+        viewModel.runGatewayRpc(GatewayMethod.PartnerDailyGet, JSONObject().put("partnerId", pid).toString()),
+      )
+      res.optJSONObject("settings")?.let { saved ->
+        greetingEnabled = saved.optBoolean("greetingEnabled", false)
+        greetingTime = saved.optString("greetingTime", "07:30")
+        nightGreetingEnabled = saved.optBoolean("nightEnabled", false)
+        nightGreetingTime = saved.optString("nightTime", "22:00")
+        fortuneEnabled = saved.optBoolean("fortuneWithGreeting", true)
+      }
+    } catch (e: CancellationException) {
+      throw e
+    } catch (e: Exception) {
+      settingsStatus = "設定を読み込めませんでした: ${e.message}"
+    }
     fetchSampleGreeting()
   }
 
@@ -256,9 +308,21 @@ internal fun DailySettingsScreen(
                 }
                 Switch(
                   checked = greetingEnabled,
-                  onCheckedChange = { greetingEnabled = it },
+                  onCheckedChange = {
+                    greetingEnabled = it
+                    saveDailySettings()
+                  },
                 )
               }
+              ClawTextField(
+                value = greetingTime,
+                onValueChange = {
+                  greetingTime = it
+                  if (isValidTime(it)) saveDailySettings()
+                },
+                placeholder = "朝の時刻 (例 07:30)",
+                modifier = Modifier.fillMaxWidth(),
+              )
 
               Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -271,9 +335,21 @@ internal fun DailySettingsScreen(
                 }
                 Switch(
                   checked = nightGreetingEnabled,
-                  onCheckedChange = { nightGreetingEnabled = it },
+                  onCheckedChange = {
+                    nightGreetingEnabled = it
+                    saveDailySettings()
+                  },
                 )
               }
+              ClawTextField(
+                value = nightGreetingTime,
+                onValueChange = {
+                  nightGreetingTime = it
+                  if (isValidTime(it)) saveDailySettings()
+                },
+                placeholder = "夜の時刻 (例 22:00)",
+                modifier = Modifier.fillMaxWidth(),
+              )
 
               Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -286,8 +362,14 @@ internal fun DailySettingsScreen(
                 }
                 Switch(
                   checked = fortuneEnabled,
-                  onCheckedChange = { fortuneEnabled = it },
+                  onCheckedChange = {
+                    fortuneEnabled = it
+                    saveDailySettings()
+                  },
                 )
+              }
+              if (settingsStatus.isNotBlank()) {
+                Text(text = settingsStatus, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
               }
             }
           }

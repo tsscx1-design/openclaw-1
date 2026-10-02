@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Nightlight
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -76,6 +77,7 @@ internal enum class SettingsRoute(
   // ── 🎮 生活・エンタメ ──
   DailySettings(nativeText("朝の挨拶 & 占い"), Icons.Default.WbSunny, SettingsCategory.Fun),
   Diary(nativeText("日記アシスタント"), Icons.AutoMirrored.Filled.MenuBook, SettingsCategory.Fun),
+  PartnerAlbum(nativeText("写真アルバム"), Icons.Default.PhotoLibrary, SettingsCategory.Fun),
   MiniGame(nativeText("ミニゲーム"), Icons.Default.SportsEsports, SettingsCategory.Fun),
 
   // ── ⚙️ モデル・自動化 ──
