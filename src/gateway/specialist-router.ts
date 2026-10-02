@@ -1,4 +1,5 @@
 import { exec, execSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -6,7 +7,10 @@ export interface SpecialistConfig {
   key: string;
   name: string;
   port: number;
+  /** File name under MODEL_DIR, or an absolute path (large models live on D:). */
   modelFile: string;
+  /** Vision projector for image input; absolute path. */
+  mmprojFile?: string;
   parallel: number;
   ctxSize: number;
   role: string;
@@ -26,13 +30,40 @@ export interface SpecialistStatus {
 
 const BONSAI_DIR = "C:\\Users\\sd190901\\.openclaw\\bonsai";
 const MODEL_DIR = path.join(BONSAI_DIR, "model");
+const EXT_MODEL_DIR = "D:\\llm-models";
+
+// general, coder and phi share one MoE server (Nemotron 3 Nano 30B-A3B) on 11435; keep in sync
+// with scripts/specialist_squad.ps1.
+// Uncensored (abliterated/heretic) builds are preferred once downloaded; same rule as the .ps1.
+const UNCENSORED_MODEL_DIR = path.join(EXT_MODEL_DIR, "uncensored");
+function preferFile(preferred: string, fallback: string): string {
+  return existsSync(preferred) ? preferred : fallback;
+}
+const SHARED_GENERAL_MODEL = preferFile(
+  path.join(UNCENSORED_MODEL_DIR, "NVIDIA-Nemotron-3-Nano-30B-A3B-BF16-heretic.i1-Q4_K_S.gguf"),
+  path.join(EXT_MODEL_DIR, "Nemotron-3-Nano-30B-A3B-UD-Q4_K_XL.gguf"),
+);
+const GEMMA_UNCENSORED_MODEL = path.join(
+  UNCENSORED_MODEL_DIR,
+  "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf",
+);
+const GEMMA_UNCENSORED_MMPROJ = path.join(
+  UNCENSORED_MODEL_DIR,
+  "mmproj-Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-f16.gguf",
+);
+const USE_GEMMA_UNCENSORED =
+  existsSync(GEMMA_UNCENSORED_MODEL) && existsSync(GEMMA_UNCENSORED_MMPROJ);
+
+export function resolveModelPath(file: string): string {
+  return path.isAbsolute(file) ? file : path.join(MODEL_DIR, file);
+}
 
 export const SPECIALIST_WORKERS: SpecialistConfig[] = [
   {
     key: "general",
-    name: "Qwen 2.5 汎用ワーカー",
+    name: "Nemotron 3 Nano 汎用ワーカー",
     port: 11435,
-    modelFile: "Qwen2.5-1.5B-Instruct-Q8_0.gguf",
+    modelFile: SHARED_GENERAL_MODEL,
     parallel: 2,
     ctxSize: 16384,
     role: "汎用要約・メモリ整理・会話分類",
@@ -50,9 +81,9 @@ export const SPECIALIST_WORKERS: SpecialistConfig[] = [
   },
   {
     key: "coder",
-    name: "Qwen 2.5 Coder 専門ワーカー",
-    port: 11436,
-    modelFile: "Qwen2.5-Coder-3B-Instruct-Q8_0.gguf",
+    name: "Nemotron 3 Nano（コード担当）",
+    port: 11435,
+    modelFile: SHARED_GENERAL_MODEL,
     parallel: 2,
     ctxSize: 16384,
     role: "コード生成・レビュー・デバッグ補助",
@@ -60,9 +91,14 @@ export const SPECIALIST_WORKERS: SpecialistConfig[] = [
   },
   {
     key: "gemma",
-    name: "Gemma 3 多言語・翻訳専門ワーカー",
+    name: "Gemma 4 E4B 多言語・翻訳・画像ワーカー",
     port: 11437,
-    modelFile: "gemma-3-4b-it-Q6_K.gguf",
+    modelFile: USE_GEMMA_UNCENSORED
+      ? GEMMA_UNCENSORED_MODEL
+      : path.join(EXT_MODEL_DIR, "gemma-4-E4B-it-UD-Q4_K_XL.gguf"),
+    mmprojFile: USE_GEMMA_UNCENSORED
+      ? GEMMA_UNCENSORED_MMPROJ
+      : path.join(EXT_MODEL_DIR, "mmproj-gemma-4-E4B-it-f16.gguf"),
     parallel: 2,
     ctxSize: 16384,
     role: "翻訳・多言語・文章校正",
@@ -70,9 +106,9 @@ export const SPECIALIST_WORKERS: SpecialistConfig[] = [
   },
   {
     key: "phi",
-    name: "Phi-4 Mini 数理・論理推論専門ワーカー",
-    port: 11438,
-    modelFile: "Phi-4-mini-instruct-Q8_0.gguf",
+    name: "Nemotron 3 Nano（数理・推論担当）",
+    port: 11435,
+    modelFile: SHARED_GENERAL_MODEL,
     parallel: 2,
     ctxSize: 16384,
     role: "数学・データ分析・論理推論",
@@ -106,18 +142,8 @@ export async function getSpecialistSquadStatus(): Promise<SpecialistStatus[]> {
   const results: SpecialistStatus[] = [];
 
   for (const worker of SPECIALIST_WORKERS) {
-    // 3Bモデルがあればそちらを優先チェック
-    let activeModelFile = worker.modelFile;
-    if (worker.key === "general") {
-      try {
-        await fs.access(path.join(MODEL_DIR, "Qwen2.5-3B-Instruct-Q8_0.gguf"));
-        activeModelFile = "Qwen2.5-3B-Instruct-Q8_0.gguf";
-      } catch {
-        // 1.5Bのまま
-      }
-    }
-
-    const modelPath = path.join(MODEL_DIR, activeModelFile);
+    const activeModelFile = worker.modelFile;
+    const modelPath = resolveModelPath(activeModelFile);
     let fileReady = false;
     try {
       await fs.access(modelPath);

@@ -108,6 +108,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -2436,6 +2437,8 @@ private data class EngineModelChoice(
   val description: String,
   val vramText: String,
   val isRecommended: Boolean = false,
+  /** Section heading in the picker; choices are shown grouped in list order. */
+  val group: String = "",
 )
 
 private data class EngineThinkingChoice(
@@ -2459,44 +2462,274 @@ internal fun OverviewModelEngineControlPanel(
         id = "bonsai/swift-bonsai-ptq1",
         label = "Swift-Bonsai 27B (PTQ1)",
         badge = "爆速推奨",
-        description = "1bit超軽量+ドラフトモデル併用で爆速推論。仕事中もチャットもOK。",
-        vramText = "6.7 GB (PTQ1+Draft)",
+        description = "いつものメイン。1bit超軽量+ドラフトで速い。仕事中もチャットもOK。",
+        vramText = "6.7 GB",
+        group = "Bonsai 27B（メイン）",
         isRecommended = true,
       ),
       EngineModelChoice(
         id = "bonsai/swift-bonsai-pq2",
         label = "Swift-Bonsai 27B (PQ2)",
         badge = "高精度",
-        description = "2bit高精度。切替時にChrome等を自動停止しVRAM確保。チャット専用時に。",
-        vramText = "6.9 GB (自動VRAM確保)",
+        description = "2bitで少し賢い。切替時にChrome等を止めてVRAMを空ける。チャット専用時に。",
+        vramText = "6.9 GB",
+        group = "Bonsai 27B（メイン）",
       ),
       EngineModelChoice(
         id = "bonsai/bonsai2-pq1",
         label = "Bonsai2 (PQ1)",
         badge = "新世代",
-        description = "Bonsai第2世代+ドラフトモデル併用。軽量高速で日常会話・タスク向け。",
-        vramText = "6.7 GB (PTQ1+Draft)",
+        description = "Bonsai第2世代+ドラフト。軽くて速く、日常会話・作業向け。",
+        vramText = "6.7 GB",
+        group = "Bonsai 27B（メイン）",
       ),
       EngineModelChoice(
         id = "bonsai/bonsai2CLACKpq1",
         label = "Bonsai2 CLACK (PQ1)",
-        badge = "自由型",
-        description = "CLACKベース+ドラフトモデル併用。ガードレール緩和・クリエイティブ用途。",
-        vramText = "6.7 GB (PTQ1+Draft)",
+        badge = "制限解除",
+        description = "Bonsaiの制限解除版(1bit)。創作・なんでも話したいときに。",
+        vramText = "6.7 GB",
+        group = "Bonsai 27B（メイン）",
       ),
       EngineModelChoice(
         id = "bonsai/ternary-bonsai-2-27b",
         label = "Ternary-Bonsai 27B (PQ2)",
         badge = "標準",
-        description = "バランス型27B。切替時にChrome等を自動停止しVRAM確保。チャット専用時に。",
-        vramText = "6.9 GB (自動VRAM確保)",
+        description = "バランス型27B。切替時にChrome等を止めてVRAMを空ける。",
+        vramText = "6.9 GB",
+        group = "Bonsai 27B（メイン）",
       ),
       EngineModelChoice(
         id = "bonsai/bonsai-crack",
         label = "Bonsai-Crack 27B (PQ2)",
-        badge = "自由型",
-        description = "ガードレール緩和版。切替時にChrome等を自動停止しVRAM確保。",
-        vramText = "6.9 GB (自動VRAM確保)",
+        badge = "制限解除",
+        description = "Bonsaiの制限解除版(2bit)。切替時にChrome等を止めてVRAMを空ける。",
+        vramText = "6.9 GB",
+        group = "Bonsai 27B（メイン）",
+      ),
+      EngineModelChoice(
+        id = "bonsai/nemoaurora-rp-12b",
+        label = "NemoAurora RP 12B",
+        badge = "日本語RP",
+        description = "日本語のキャラなりきり特化(Aratako製)。口調や性格をよく守る。まず試すならこれ。",
+        vramText = "6.7 GB",
+        group = "日本語ロールプレイ・なりきり",
+      ),
+      EngineModelChoice(
+        id = "bonsai/himeyuri-magnum-12b",
+        label = "Himeyuri Magnum 12B",
+        badge = "日本語RP",
+        description = "日本語の小説・ロールプレイ向け+制限解除。描写が豊かで感情表現が得意。",
+        vramText = "6.7 GB",
+        group = "日本語ロールプレイ・なりきり",
+      ),
+      EngineModelChoice(
+        id = "bonsai/qwen3-8b-rp",
+        label = "Qwen3 8B RP",
+        badge = "日本語RP",
+        description = "日本語のキャラなりきり特化(Aratako製)。軽くて反応が速い。",
+        vramText = "5.0 GB",
+        group = "日本語ロールプレイ・なりきり",
+      ),
+      EngineModelChoice(
+        id = "bonsai/qwen3-8b-erp",
+        label = "Qwen3 8B ERP",
+        badge = "日本語RP",
+        description = "上のRP版の制限なし版。大人向けの会話もできる。",
+        vramText = "5.0 GB",
+        group = "日本語ロールプレイ・なりきり",
+      ),
+      EngineModelChoice(
+        id = "bonsai/shisa-v2-nemo-12b-abliterated",
+        label = "Shisa v2 Nemo 12B",
+        badge = "日本語",
+        description = "日本語を強化したモデルの制限解除版。自然な日本語で雑談・なりきり。",
+        vramText = "6.7 GB",
+        group = "日本語ロールプレイ・なりきり",
+      ),
+      EngineModelChoice(
+        id = "bonsai/mag-mell-r1-12b",
+        label = "Mag-Mell R1 12B",
+        badge = "英語RP",
+        description = "英語圏で大人気のRP・創作モデル。日本語は少し不自然になることがある。",
+        vramText = "6.8 GB",
+        group = "ロールプレイ（英語中心）",
+      ),
+      EngineModelChoice(
+        id = "bonsai/magnum-v2-12b",
+        label = "Magnum v2 12B",
+        badge = "英語RP",
+        description = "小説風の文章が得意な英語RPモデル。日本語もそこそこ。",
+        vramText = "6.8 GB",
+        group = "ロールプレイ（英語中心）",
+      ),
+      EngineModelChoice(
+        id = "bonsai/hermes3-8b",
+        label = "Hermes 3 8B",
+        badge = "会話",
+        description = "Llama 3.1ベースの会話・RP向け。指示に素直に従う。",
+        vramText = "4.7 GB",
+        group = "ロールプレイ（英語中心）",
+      ),
+      EngineModelChoice(
+        id = "bonsai/qwen3.8-9b-heretic",
+        label = "Qwen3.8 9B",
+        badge = "最新・制限解除",
+        description = "Qwenの最新世代9Bの制限解除版。日本語が上手く賢い。普段使いの本命候補。",
+        vramText = "5.6 GB",
+        group = "制限解除・汎用",
+      ),
+      EngineModelChoice(
+        id = "bonsai/qwen3.5-9b-uncensored",
+        label = "Qwen3.5 9B",
+        badge = "人気・制限解除",
+        description = "70万DL超の人気制限解除版(HauhauCS)。日本語◎、何でも答える。",
+        vramText = "5.6 GB",
+        group = "制限解除・汎用",
+      ),
+      EngineModelChoice(
+        id = "bonsai/qwen3.5-9b-defiant-fable",
+        label = "Qwen3.5 9B Defiant Fable",
+        badge = "創作",
+        description = "190万DL超の人気モデル。物語・創作・ロールプレイに強い制限解除版。",
+        vramText = "6.4 GB",
+        group = "制限解除・汎用",
+      ),
+      EngineModelChoice(
+        id = "bonsai/gemma4-12b-uncensored",
+        label = "Gemma 4 12B",
+        badge = "人気・制限解除",
+        description = "Googleの最新Gemma 4の制限解除版(88万DL)。日本語が自然で丁寧。",
+        vramText = "7.4 GB",
+        group = "制限解除・汎用",
+      ),
+      EngineModelChoice(
+        id = "bonsai/gemma4-e4b-uncensored",
+        label = "Gemma 4 E4B",
+        badge = "制限解除",
+        description = "Gemma 4小型の制限解除版(130万DL)。軽くて日本語も上手。",
+        vramText = "5.3 GB",
+        group = "制限解除・汎用",
+      ),
+      EngineModelChoice(
+        id = "bonsai/elyza-jp-8b",
+        label = "ELYZA Llama-3 JP 8B",
+        badge = "日本語",
+        description = "ELYZA社の日本語特化モデル。制限は通常どおり。",
+        vramText = "4.9 GB",
+        group = "制限解除・汎用",
+      ),
+      EngineModelChoice(
+        id = "bonsai/gemma2-9b",
+        label = "Gemma 2 9B",
+        badge = "制限解除",
+        description = "Googleの一つ前の世代の制限解除版。丁寧な文章。",
+        vramText = "5.8 GB",
+        group = "制限解除・汎用",
+      ),
+      EngineModelChoice(
+        id = "bonsai/llama3.1-8b",
+        label = "Llama 3.1 8B",
+        badge = "制限解除",
+        description = "Metaの8Bの制限解除版。英語が中心。",
+        vramText = "4.9 GB",
+        group = "制限解除・汎用",
+      ),
+      EngineModelChoice(
+        id = "bonsai/qwen2.5-7b-abliterated",
+        label = "Qwen2.5 7B",
+        badge = "制限解除",
+        description = "少し前のQwenの制限解除版。日本語も可。",
+        vramText = "4.7 GB",
+        group = "制限解除・汎用",
+      ),
+      EngineModelChoice(
+        id = "bonsai/deepseek-r1-qwen3-8b-abliterated",
+        label = "DeepSeek R1 Qwen3 8B",
+        badge = "推論",
+        description = "考えてから答える推論モデルの制限解除版。計算・論理向け。",
+        vramText = "5.0 GB",
+        group = "制限解除・汎用",
+      ),
+      EngineModelChoice(
+        id = "bonsai/dolphin-llama3-8b",
+        label = "Dolphin Llama3 8B",
+        badge = "制限少なめ",
+        description = "もともと制限の少ない会話モデル。英語寄り。",
+        vramText = "4.7 GB",
+        group = "制限解除・汎用",
+      ),
+      EngineModelChoice(
+        id = "bonsai/dolphin-mistral-7b",
+        label = "Dolphin Mistral 7B",
+        badge = "制限少なめ",
+        description = "もともと制限の少ない会話モデル(Mistral)。英語寄り。",
+        vramText = "4.1 GB",
+        group = "制限解除・汎用",
+      ),
+      EngineModelChoice(
+        id = "bonsai/gemma4-e2b-uncensored",
+        label = "Gemma 4 E2B",
+        badge = "超軽量",
+        description = "Gemma 4最小の制限解除版。とにかく速い。簡単な会話向け。",
+        vramText = "3.9 GB",
+        group = "軽量・高速",
+      ),
+      EngineModelChoice(
+        id = "bonsai/qwen3.5-4b-abliterated",
+        label = "Qwen3.5 4B",
+        badge = "軽量",
+        description = "Qwen3.5小型の制限解除版。軽いわりに賢い。",
+        vramText = "4.5 GB",
+        group = "軽量・高速",
+      ),
+      EngineModelChoice(
+        id = "bonsai/qwen3-4b-abliterated",
+        label = "Qwen3 4B 2507",
+        badge = "軽量",
+        description = "Qwen3小型の制限解除版。",
+        vramText = "2.5 GB",
+        group = "軽量・高速",
+      ),
+      EngineModelChoice(
+        id = "bonsai/phi4-mini-abliterated",
+        label = "Phi-4 Mini",
+        badge = "軽量",
+        description = "Microsoftの小型の制限解除版。英語・計算向け。",
+        vramText = "4.1 GB",
+        group = "軽量・高速",
+      ),
+      EngineModelChoice(
+        id = "bonsai/gemma3-4b-abliterated",
+        label = "Gemma 3 4B",
+        badge = "軽量",
+        description = "Gemma 3小型の制限解除版。",
+        vramText = "3.2 GB",
+        group = "軽量・高速",
+      ),
+      EngineModelChoice(
+        id = "bonsai/qwen2.5-coder-3b-abliterated",
+        label = "Qwen2.5 Coder 3B",
+        badge = "コード",
+        description = "プログラミング向け小型の制限解除版。",
+        vramText = "3.3 GB",
+        group = "軽量・高速",
+      ),
+      EngineModelChoice(
+        id = "bonsai/phi3-mini",
+        label = "Phi-3 Mini",
+        badge = "超軽量",
+        description = "軽くて速い小型の制限解除版。英語向け。",
+        vramText = "2.4 GB",
+        group = "軽量・高速",
+      ),
+      EngineModelChoice(
+        id = "bonsai/qwen2.5-3b",
+        label = "Qwen2.5 3B",
+        badge = "超軽量",
+        description = "軽くて速い小型の制限解除版。",
+        vramText = "1.9 GB",
+        group = "軽量・高速",
       ),
     )
   }
@@ -2513,6 +2746,7 @@ internal fun OverviewModelEngineControlPanel(
 
 
   var selectedModelId by remember { mutableStateOf("bonsai/swift-bonsai-ptq1") }
+  val expandedGroups = remember { mutableStateMapOf<String, Boolean>() }
   var selectedThinkingLevel by remember { mutableStateOf("medium") }
   var isApplying by remember { mutableStateOf(false) }
   var statusMessage by remember { mutableStateOf<String?>(null) }
@@ -2562,78 +2796,108 @@ internal fun OverviewModelEngineControlPanel(
           color = ClawTheme.colors.text,
         )
 
-        modelChoices.forEach { choice ->
-          val isSelected = choice.id == selectedModelId
-          Box(
+        modelChoices.groupBy { it.group }.forEach { (group, choices) ->
+          val holdsSelection = choices.any { it.id == selectedModelId }
+          // The section holding the current choice starts open; the others start closed.
+          val expanded = expandedGroups[group] ?: holdsSelection
+          Row(
             modifier = Modifier
               .fillMaxWidth()
-              .clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
-              .background(
-                if (isSelected) ClawTheme.colors.primary.copy(alpha = 0.12f)
-                else ClawTheme.colors.surfaceRaised.copy(alpha = 0.5f)
-              )
-              .border(
-                width = if (isSelected) 1.5.dp else 1.dp,
-                color = if (isSelected) ClawTheme.colors.primary else ClawTheme.colors.border.copy(alpha = 0.6f),
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
-              )
-              .clickable { selectedModelId = choice.id }
-              .padding(horizontal = 12.dp, vertical = 8.dp),
+              .clickable { expandedGroups[group] = !expanded }
+              .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
           ) {
-            Row(
-              modifier = Modifier.fillMaxWidth(),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-              Column(modifier = Modifier.weight(1f)) {
-                Row(
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                  Text(
-                    text = choice.label,
-                    style = ClawTheme.type.body.copy(
-                      fontSize = 13.sp,
-                      fontWeight = if (isSelected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Medium,
-                    ),
-                    color = if (isSelected) ClawTheme.colors.text else ClawTheme.colors.textMuted,
+            Text(
+              text = "$group（${choices.size}）",
+              style = ClawTheme.type.caption.copy(
+                fontSize = 12.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+              ),
+              color = if (holdsSelection) ClawTheme.colors.primary else ClawTheme.colors.text,
+            )
+            Icon(
+              imageVector = if (expanded) Icons.Filled.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+              contentDescription = null,
+              modifier = Modifier.size(18.dp),
+              tint = ClawTheme.colors.textMuted,
+            )
+          }
+          if (expanded) {
+            choices.forEach { choice ->
+              val isSelected = choice.id == selectedModelId
+              Box(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
+                  .background(
+                    if (isSelected) ClawTheme.colors.primary.copy(alpha = 0.12f)
+                    else ClawTheme.colors.surfaceRaised.copy(alpha = 0.5f)
                   )
-                  if (choice.isRecommended) {
-                    Box(
-                      modifier = Modifier
-                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
-                        .background(ClawTheme.colors.primary)
-                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                  .border(
+                    width = if (isSelected) 1.5.dp else 1.dp,
+                    color = if (isSelected) ClawTheme.colors.primary else ClawTheme.colors.border.copy(alpha = 0.6f),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+                  )
+                  .clickable { selectedModelId = choice.id }
+                  .padding(horizontal = 12.dp, vertical = 8.dp),
+              ) {
+                Row(
+                  modifier = Modifier.fillMaxWidth(),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                  Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(6.dp),
                     ) {
                       Text(
-                        text = choice.badge,
-                        style = ClawTheme.type.caption.copy(
-                          fontSize = 9.sp,
-                          fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                        text = choice.label,
+                        style = ClawTheme.type.body.copy(
+                          fontSize = 13.sp,
+                          fontWeight = if (isSelected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Medium,
                         ),
-                        color = androidx.compose.ui.graphics.Color.White,
+                        color = if (isSelected) ClawTheme.colors.text else ClawTheme.colors.textMuted,
                       )
+                      if (choice.isRecommended) {
+                        Box(
+                          modifier = Modifier
+                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+                            .background(ClawTheme.colors.primary)
+                            .padding(horizontal = 5.dp, vertical = 1.dp),
+                        ) {
+                          Text(
+                            text = choice.badge,
+                            style = ClawTheme.type.caption.copy(
+                              fontSize = 9.sp,
+                              fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                            ),
+                            color = androidx.compose.ui.graphics.Color.White,
+                          )
+                        }
+                      }
                     }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                      text = choice.description,
+                      style = ClawTheme.type.caption.copy(fontSize = 11.sp),
+                      color = ClawTheme.colors.textMuted,
+                      maxLines = 3,
+                      overflow = TextOverflow.Ellipsis,
+                    )
                   }
+                  Spacer(modifier = Modifier.width(8.dp))
+                  Text(
+                    text = choice.vramText,
+                    style = ClawTheme.type.caption.copy(
+                      fontSize = 11.sp,
+                      fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                    ),
+                    color = if (isSelected) ClawTheme.colors.primary else ClawTheme.colors.textMuted,
+                  )
                 }
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                  text = choice.description,
-                  style = ClawTheme.type.caption.copy(fontSize = 11.sp),
-                  color = ClawTheme.colors.textMuted,
-                  maxLines = 1,
-                  overflow = TextOverflow.Ellipsis,
-                )
               }
-              Spacer(modifier = Modifier.width(8.dp))
-              Text(
-                text = choice.vramText,
-                style = ClawTheme.type.caption.copy(
-                  fontSize = 11.sp,
-                  fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
-                ),
-                color = if (isSelected) ClawTheme.colors.primary else ClawTheme.colors.textMuted,
-              )
             }
           }
         }

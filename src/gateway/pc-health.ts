@@ -70,12 +70,10 @@ async function readGpu(): Promise<PcHealthSnapshot["gpu"]> {
 
 async function sampleCpuLoad(): Promise<number> {
   const snap = () =>
-    os
-      .cpus()
-      .map((c) => ({
-        idle: c.times.idle,
-        total: Object.values(c.times).reduce((a, b) => a + b, 0),
-      }));
+    os.cpus().map((c) => ({
+      idle: c.times.idle,
+      total: Object.values(c.times).reduce((a, b) => a + b, 0),
+    }));
   const a = snap();
   await new Promise((resolve) => setTimeout(resolve, 400));
   const b = snap();
@@ -175,7 +173,8 @@ export async function readPcHealth(): Promise<PcHealthSnapshot> {
     isHttpUp("http://127.0.0.1:11434/health"),
     isHttpUp("http://127.0.0.1:50021/version"),
     isHttpUp("http://127.0.0.1:10101/version"),
-    ...[11435, 11436, 11437, 11438].map((port) => isHttpUp(`http://127.0.0.1:${port}/health`)),
+    // general/coder/phi share 11435 (Nemotron), gemma is 11437; see specialist-router.ts
+    ...[11435, 11437].map((port) => isHttpUp(`http://127.0.0.1:${port}/health`)),
   ]);
   const total = os.totalmem();
   const used = total - os.freemem();
@@ -198,7 +197,7 @@ export async function readPcHealth(): Promise<PcHealthSnapshot> {
       { key: "llm", name: "メインLLM", up: llm, required: true },
       {
         key: "workers",
-        name: `裏作業員（${workers.filter(Boolean).length}/4 待機）`,
+        name: `裏作業員（${workers.filter(Boolean).length}/${workers.length} 待機）`,
         up: workers.some(Boolean),
         required: false,
       },

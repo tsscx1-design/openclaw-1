@@ -28,6 +28,296 @@ const BONSAI_MODEL_FILES: Record<string, string> = {
 };
 const DEFAULT_BONSAI_MODEL_FILE = "Swift-Bonsai-2-PTQ1_0.gguf";
 
+// Models moved out of the old Ollama store (2026-10-02). They run on the same main llama-server
+// (port 11434) via start_model.ps1. ctx is capped by each model's trained context and by 8 GB VRAM.
+const MIGRATED_MODEL_DIR = "D:\\llm-models\\ollama-migrated";
+// Abliterated/uncensored replacements and roleplay models (2026-10-02).
+const UNCENSORED_MODEL_DIR = "D:\\llm-models\\uncensored";
+type LocalGgufModel = {
+  file: string;
+  ctx: number;
+  label: string;
+  /** Folder holding `file`; defaults to MIGRATED_MODEL_DIR. */
+  dir?: string;
+  /** MoE models larger than VRAM: keep expert weights in RAM (llama-server --cpu-moe). */
+  cpuMoe?: boolean;
+  /** Run on upstream llama.cpp: the PrismML build crashes on the GPU with Qwen3.5/3.8-family models. */
+  mainline?: boolean;
+  /**
+   * Not shown in the picker: an old id kept so saved settings still resolve, or a model on hold
+   * (files over 8 GB stay on D: but are hidden until the user asks for them).
+   */
+  hidden?: boolean;
+};
+const LOCAL_GGUF_MODELS: Record<string, LocalGgufModel> = {
+  "elyza-jp-8b": {
+    file: "elyza_Llama-3-ELYZA-JP-8B-GGUF-latest.gguf",
+    ctx: 8192,
+    label: "ELYZA Llama-3 JP 8B（日本語特化）",
+  },
+  "magnum-v2-12b": {
+    file: "mradermacher_Magnum-v2-12b-GGUF-latest.gguf",
+    ctx: 8192,
+    label: "Magnum v2 12B（英語ロールプレイ）",
+  },
+  "deepseek-r1-qwen3-8b-abliterated": {
+    file: "huihui_ai_deepseek-r1-abliterated-latest.gguf",
+    ctx: 16384,
+    label: "DeepSeek R1 Qwen3 8B（推論・制限解除）",
+  },
+  "qwen2.5-7b-abliterated": {
+    file: "huihui_ai_qwen2.5-abliterate-7b.gguf",
+    ctx: 16384,
+    label: "Qwen2.5 7B（制限解除）",
+  },
+  "dolphin-llama3-8b": {
+    file: "dolphin-llama3-8b.gguf",
+    ctx: 8192,
+    label: "Dolphin Llama3 8B（制限少なめ）",
+  },
+  "dolphin-mistral-7b": {
+    file: "dolphin-mistral-latest.gguf",
+    ctx: 16384,
+    label: "Dolphin Mistral 7B（制限少なめ）",
+  },
+  "hermes3-8b": { file: "hermes3-8b.gguf", ctx: 16384, label: "Hermes 3 8B（会話・ロールプレイ）" },
+  // Replaced by abliterated builds; the ids stay the same so saved settings keep working.
+  "gemma2-9b": {
+    file: "gemma-2-9b-it-abliterated-Q4_K_M.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 8192,
+    label: "Gemma 2 9B（制限解除）",
+  },
+  "llama3.1-8b": {
+    file: "meta-llama-3.1-8b-instruct-abliterated.Q4_K_M.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    label: "Llama 3.1 8B（制限解除）",
+  },
+  "phi3-mini": {
+    file: "Phi-3-mini-128k-instruct-abliterated-v3.Q4_K_M.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    label: "Phi-3 Mini（制限解除）",
+  },
+  "qwen2.5-3b": {
+    file: "Qwen2.5-3B-Instruct-abliterated.Q4_K_M.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    label: "Qwen2.5 3B（制限解除）",
+  },
+  "qwen2.5-7b": {
+    file: "huihui_ai_qwen2.5-abliterate-7b.gguf",
+    ctx: 16384,
+    label: "Qwen2.5 7B（制限解除）",
+    hidden: true,
+  },
+  "qwen3-4b-thinking": {
+    file: "Huihui-Qwen3-4B-Instruct-2507-abliterated.Q4_K_M.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    label: "Qwen3 4B 2507（制限解除）",
+    hidden: true,
+  },
+  "qwen3-4b-abliterated": {
+    file: "Huihui-Qwen3-4B-Instruct-2507-abliterated.Q4_K_M.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    label: "Qwen3 4B 2507（制限解除）",
+  },
+  "qwen3.5-4b-abliterated": {
+    file: "Huihui-Qwen3.5-4B-abliterated.Q8_0.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    label: "Qwen3.5 4B（制限解除）",
+    mainline: true,
+  },
+  "phi4-mini-abliterated": {
+    file: "Phi-4-mini-instruct-abliterated.Q8_0.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    label: "Phi-4 Mini（制限解除）",
+  },
+  "gemma3-4b-abliterated": {
+    file: "mlabonne_gemma-3-4b-it-abliterated-Q6_K.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    label: "Gemma 3 4B（制限解除）",
+  },
+  "qwen2.5-coder-3b-abliterated": {
+    file: "Qwen2.5-Coder-3B-Instruct-abliterated-Q8_0.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    label: "Qwen2.5 Coder 3B（制限解除）",
+  },
+  "gemma4-e4b-uncensored": {
+    file: "Gemma-4-E4B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    label: "Gemma 4 E4B（制限解除）",
+  },
+  "gemma4-12b-uncensored": {
+    file: "Gemma4-12B-QAT-Uncensored-HauhauCS-Balanced-Q4_K_M.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 8192,
+    label: "Gemma 4 12B（制限解除）",
+  },
+  // Roleplay / character models
+  "nemoaurora-rp-12b": {
+    file: "NemoAurora-RP-12B-IQ4_XS.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 8192,
+    label: "NemoAurora RP 12B（日本語ロールプレイ）",
+  },
+  "qwen3-8b-erp": {
+    file: "Qwen3-8B-ERP-v0.1-Q4_K_M.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    label: "Qwen3 8B ERP（日本語ロールプレイ）",
+  },
+  "shisa-v2-nemo-12b-abliterated": {
+    file: "Shisa-v2-Mistral-Nemo-12B-Abliterated.i1-IQ4_XS.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 8192,
+    label: "Shisa v2 Nemo 12B（日本語・制限解除）",
+  },
+  "mag-mell-r1-12b": {
+    file: "MN-12B-Mag-Mell-R1.IQ4_XS.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 8192,
+    label: "Mag-Mell R1 12B（英語ロールプレイ）",
+  },
+  // MoE models bigger than VRAM: attention on GPU, experts in RAM
+  "qwen3-30b-a3b-erp": {
+    file: "Qwen3-30B-A3B-ERP-v0.1-Q4_K_M.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    cpuMoe: true,
+    label: "Qwen3 30B-A3B ERP（日本語ロールプレイ・大型）",
+    hidden: true,
+  },
+  "gemma4-26b-a4b-uncensored": {
+    file: "Gemma4-26B-A4B-QAT-Uncensored-HauhauCS-Balanced-Q4_K_M.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    cpuMoe: true,
+    label: "Gemma 4 26B-A4B（制限解除・大型）",
+    hidden: true,
+  },
+  "qwen3.6-35b-a3b-uncensored": {
+    file: "Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    cpuMoe: true,
+    label: "Qwen3.6 35B-A3B（制限解除・大型）",
+    hidden: true,
+  },
+  // Added 2026-10-02 (2nd batch): popular uncensored builds that handle Japanese well
+  "gemma4-e2b-uncensored": {
+    file: "Gemma-4-E2B-Uncensored-HauhauCS-Aggressive-Q6_K_P.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    label: "Gemma 4 E2B（制限解除・超軽量）",
+  },
+  "qwen3-8b-rp": {
+    file: "Qwen3-8B-RP-v0.1-Q4_K_M.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    label: "Qwen3 8B RP（日本語ロールプレイ）",
+  },
+  "qwen3.5-9b-uncensored": {
+    file: "Qwen3.5-9B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    label: "Qwen3.5 9B（制限解除）",
+    mainline: true,
+  },
+  "qwen3.8-9b-heretic": {
+    file: "Qwen3.8-9B-heretic-uncensored.Q4_K_M.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    label: "Qwen3.8 9B（制限解除・最新）",
+    mainline: true,
+  },
+  "himeyuri-magnum-12b": {
+    file: "Himeyuri-Magnum-12B-HereticLoRA.i1-IQ4_XS.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 8192,
+    label: "Himeyuri Magnum 12B（日本語ロールプレイ・小説）",
+  },
+  "qwen3.5-9b-defiant-fable": {
+    file: "Qwen3.5-9B-The-Defiant-Fable-Uncnr-Heretic-NEO-MAX-IQ4_XS.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    label: "Qwen3.5 9B Defiant Fable（制限解除・創作）",
+    mainline: true,
+  },
+  "gemma4-26b-japanese": {
+    file: "gemma-4-26B-A4B-it-qat-heretic-japanese-96e-Q4_0.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 16384,
+    cpuMoe: true,
+    label: "Gemma 4 26B 日本語特化（制限解除・大型）",
+    hidden: true,
+  },
+  "calm3-22b-rp": {
+    file: "calm3-22b-RP-v2-IQ4_XS.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 8192,
+    label: "CALM3 22B RP（日本語ロールプレイ・大型）",
+    hidden: true,
+  },
+  "qwen3.8-27b-uncensored": {
+    file: "Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-IQ4_XS.gguf",
+    dir: UNCENSORED_MODEL_DIR,
+    ctx: 8192,
+    label: "Qwen3.8 27B（制限解除・大型）",
+    hidden: true,
+  },
+};
+
+function localModelPath(entry: LocalGgufModel): string {
+  return path.join(entry.dir ?? MIGRATED_MODEL_DIR, entry.file);
+}
+
+// One entry per Bonsai file for the model picker (BONSAI_MODEL_FILES also keeps legacy aliases).
+const BONSAI_PICKER_IDS = [
+  "swift-bonsai-ptq1",
+  "swift-bonsai-pq2",
+  "ternary-bonsai-ptq1",
+  "ternary-bonsai-pq2",
+  "bonsai2clackpq1",
+  "bonsai-crack-pq2",
+];
+
+async function fileSize(file: string): Promise<number> {
+  try {
+    const fs = await import("node:fs/promises");
+    return (await fs.stat(file)).size;
+  } catch {
+    return 0;
+  }
+}
+
+/** Local GGUF models selectable from the app, in the shape the model pickers already read. */
+async function listLocalGgufModels(): Promise<
+  Array<{ name: string; size: number; label: string }>
+> {
+  const home = process.env.OPENCLAW_HOME || path.join(os.homedir(), ".openclaw");
+  const bonsaiDir = path.join(home, "bonsai", "model");
+  const out: Array<{ name: string; size: number; label: string }> = [];
+  for (const id of BONSAI_PICKER_IDS) {
+    const size = await fileSize(path.join(bonsaiDir, BONSAI_MODEL_FILES[id] ?? ""));
+    if (size > 0) out.push({ name: `bonsai/${id}`, size, label: BONSAI_MODEL_FILES[id] ?? id });
+  }
+  for (const [id, entry] of Object.entries(LOCAL_GGUF_MODELS)) {
+    if (entry.hidden) continue;
+    const size = await fileSize(localModelPath(entry));
+    if (size > 0) out.push({ name: `bonsai/${id}`, size, label: entry.label });
+  }
+  return out;
+}
+
 // thinkingLevel → reasoning_budget (off:0 / low:512 / medium:2048 / high:8192 / max:-1 unlimited)
 const THINKING_BUDGETS: Record<string, number> = {
   off: 0,
@@ -238,7 +528,17 @@ export const ollamaHandlers: GatewayRequestHandlers = {
 
   "ollama.models.list": async ({ respond }) => {
     try {
-      const models = await ollamaManager.listModels();
+      // Ollama itself is gone; port 11434 is llama-server and reports only the loaded model.
+      // The local GGUF files are the real choices, so list them first.
+      let served: Array<{ name?: string }> = [];
+      try {
+        served = await ollamaManager.listModels();
+      } catch {
+        // listing the running server is best-effort
+      }
+      const local = await listLocalGgufModels();
+      const localNames = new Set(local.map((m) => m.name));
+      const models = [...local, ...served.filter((m) => !localNames.has(`bonsai/${m.name ?? ""}`))];
       // Also get the current active model from config
       const snapshot = await readSourceConfigSnapshot();
       const configuredModel = snapshot.sourceConfig?.agents?.defaults?.model;
@@ -263,13 +563,17 @@ export const ollamaHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const cleanModel = rawModel.replace(/^(ollama|bonsai|prism-local)\//, "").trim();
+    const localModel = Object.hasOwn(LOCAL_GGUF_MODELS, cleanModel.toLowerCase())
+      ? LOCAL_GGUF_MODELS[cleanModel.toLowerCase()]
+      : undefined;
     const isBonsaiModel =
       rawModel.startsWith("bonsai/") ||
       rawModel.startsWith("prism-local/") ||
       rawModel.includes("bonsai") ||
       rawModel.includes("ptq1") ||
-      rawModel.includes("pq2");
-    const cleanModel = rawModel.replace(/^(ollama|bonsai|prism-local)\//, "").trim();
+      rawModel.includes("pq2") ||
+      localModel !== undefined;
     const fullModelRef = isBonsaiModel
       ? rawModel.includes("/")
         ? rawModel
@@ -291,8 +595,9 @@ export const ollamaHandlers: GatewayRequestHandlers = {
     // Bonsai/ローカルGGUFモデルの場合、安全にプロセス切替＆思考バジェット設定を行う
     if (isBonsaiModel) {
       try {
-        const targetFile =
-          BONSAI_MODEL_FILES[cleanModel.toLowerCase()] ?? DEFAULT_BONSAI_MODEL_FILE;
+        const targetFile = localModel
+          ? localModelPath(localModel)
+          : (BONSAI_MODEL_FILES[cleanModel.toLowerCase()] ?? DEFAULT_BONSAI_MODEL_FILE);
         const scriptPath = resolveStartModelScriptPath();
         const isPQ2 = targetFile.includes("PQ2");
 
@@ -343,6 +648,11 @@ export const ollamaHandlers: GatewayRequestHandlers = {
               thinkingLevel,
               "-ReasoningBudget",
               String(reasoningBudget),
+              ...(localModel ? ["-ContextSize", String(localModel.ctx)] : []),
+              ...(localModel?.cpuMoe ? ["-CpuMoe"] : []),
+              ...(localModel?.mainline ? ["-Mainline"] : []),
+              // Let llama-server --fit choose the GPU layer count so 12B+ models never overflow 8 GB VRAM.
+              ...(localModel ? ["-GpuLayers", "-1"] : []),
             ],
             { windowsHide: true },
             (err) => {
