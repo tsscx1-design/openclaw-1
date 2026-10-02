@@ -163,12 +163,15 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   wizard: () => import("./wizard.js").then((module) => module.wizardHandlers),
   ollama: () => import("./ollama.js").then((module) => module.ollamaHandlers),
   partners: () =>
-    Promise.all([import("./partners.js"), import("./partner-features.js")]).then(
-      ([base, features]) => ({
-        ...base.partnersHandlers,
-        ...features.partnerFeatureHandlers,
-      }),
-    ),
+    Promise.all([
+      import("./partners.js"),
+      import("./partner-features.js"),
+      import("./media-studio.js"),
+    ]).then(([base, features, media]) => ({
+      ...base.partnersHandlers,
+      ...features.partnerFeatureHandlers,
+      ...media.mediaStudioHandlers,
+    })),
   memories: () => import("./memories.js").then((module) => module.memoriesHandlers),
   features: () => import("./features.js").then((module) => module.featuresHandlers),
   backup: () => import("./backup.js").then((module) => module.backupHandlers),

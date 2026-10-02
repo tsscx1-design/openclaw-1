@@ -78,6 +78,7 @@ internal enum class SettingsRoute(
   DailySettings(nativeText("朝の挨拶 & 占い"), Icons.Default.WbSunny, SettingsCategory.Fun),
   Diary(nativeText("日記アシスタント"), Icons.AutoMirrored.Filled.MenuBook, SettingsCategory.Fun),
   PartnerAlbum(nativeText("写真アルバム"), Icons.Default.PhotoLibrary, SettingsCategory.Fun),
+  MediaStudio(nativeText("生成スタジオ"), Icons.Default.Palette, SettingsCategory.Fun),
   MiniGame(nativeText("ミニゲーム"), Icons.Default.SportsEsports, SettingsCategory.Fun),
 
   // ── ⚙️ モデル・自動化 ──

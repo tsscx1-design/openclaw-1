@@ -1716,6 +1716,11 @@ private fun SettingsShellScreen(
             status = isConnected,
           ),
           SettingsRow(
+            SettingsRoute.MediaStudio,
+            nativeText("画像・動画・音楽を作る"),
+            status = isConnected,
+          ),
+          SettingsRow(
             SettingsRoute.MiniGame,
             nativeText("しりとり・クイズ・創作"),
             status = isConnected,

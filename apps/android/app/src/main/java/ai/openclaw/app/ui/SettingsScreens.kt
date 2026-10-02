@@ -292,6 +292,7 @@ internal fun SettingsDetailScreen(
       partnerId = rememberSettingsPartnerId(viewModel),
       onBack = onBack,
     )
+    SettingsRoute.MediaStudio -> MediaStudioScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.MiniGame -> MiniGameScreen(
       viewModel = viewModel,
       partnerId = rememberSettingsPartnerId(viewModel),
