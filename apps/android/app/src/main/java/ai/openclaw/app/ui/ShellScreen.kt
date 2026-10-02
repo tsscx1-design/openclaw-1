@@ -2791,7 +2791,8 @@ internal fun OverviewModelEngineControlPanel(
       )
 
       // モデル選択エリア
-      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      // Roomy rows: the list is long and tightly packed rows caused mis-taps.
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
           text = "実行モデル選択",
           style = ClawTheme.type.caption.copy(
@@ -2808,15 +2809,18 @@ internal fun OverviewModelEngineControlPanel(
           Row(
             modifier = Modifier
               .fillMaxWidth()
+              .heightIn(min = 52.dp)
+              .clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
+              .background(ClawTheme.colors.surfaceRaised.copy(alpha = 0.8f))
               .clickable { expandedGroups[group] = !expanded }
-              .padding(vertical = 4.dp),
+              .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
           ) {
             Text(
               text = "$group（${choices.size}）",
               style = ClawTheme.type.caption.copy(
-                fontSize = 12.sp,
+                fontSize = 14.sp,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
               ),
               color = if (holdsSelection) ClawTheme.colors.primary else ClawTheme.colors.text,
@@ -2824,7 +2828,7 @@ internal fun OverviewModelEngineControlPanel(
             Icon(
               imageVector = if (expanded) Icons.Filled.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
               contentDescription = null,
-              modifier = Modifier.size(18.dp),
+              modifier = Modifier.size(24.dp),
               tint = ClawTheme.colors.textMuted,
             )
           }
@@ -2844,8 +2848,9 @@ internal fun OverviewModelEngineControlPanel(
                     color = if (isSelected) ClawTheme.colors.primary else ClawTheme.colors.border.copy(alpha = 0.6f),
                     shape = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
                   )
+                  .heightIn(min = 64.dp)
                   .clickable { selectedModelId = choice.id }
-                  .padding(horizontal = 12.dp, vertical = 8.dp),
+                  .padding(horizontal = 14.dp, vertical = 14.dp),
               ) {
                 Row(
                   modifier = Modifier.fillMaxWidth(),
@@ -2860,7 +2865,7 @@ internal fun OverviewModelEngineControlPanel(
                       Text(
                         text = choice.label,
                         style = ClawTheme.type.body.copy(
-                          fontSize = 13.sp,
+                          fontSize = 15.sp,
                           fontWeight = if (isSelected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Medium,
                         ),
                         color = if (isSelected) ClawTheme.colors.text else ClawTheme.colors.textMuted,
@@ -2886,7 +2891,7 @@ internal fun OverviewModelEngineControlPanel(
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
                       text = choice.description,
-                      style = ClawTheme.type.caption.copy(fontSize = 11.sp),
+                      style = ClawTheme.type.caption.copy(fontSize = 12.sp),
                       color = ClawTheme.colors.textMuted,
                       maxLines = 3,
                       overflow = TextOverflow.Ellipsis,
