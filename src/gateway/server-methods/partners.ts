@@ -12,7 +12,11 @@ import {
   touchGroupChatMode,
 } from "../group-chat-model.js";
 import { parseJsonObject } from "../llm-json.js";
-import { parsePartnerSheet } from "../partner-sheet-schema.js";
+import {
+  parsePartnerSheet,
+  REAL_PERSON_RULES,
+  REAL_PERSON_SECTION_TITLE,
+} from "../partner-sheet-schema.js";
 import {
   appendPartnerMood,
   bondRelationshipDirective,
@@ -45,6 +49,8 @@ export interface PartnerProfile {
   reasoningEffort?: string;
   characterSheet?: string;
   settings?: PartnerSettings;
+  /** Modeled on a real person: the prompt adds REAL_PERSON_RULES (no sexual content, no private life). */
+  realPerson?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -269,11 +275,51 @@ export async function completeWithMainModel(params: {
   return stripThinking(json.choices?.[0]?.message?.content ?? "");
 }
 
-/** Sample lines (「…」) from the free-text section; small models imitate examples better than descriptions. */
+type FreeTextSection = { heading: string; body: string };
+
+/** The free text split at its "###" subheadings; text before the first one has no heading. */
+export function splitFreeTextSections(freeText: string): FreeTextSection[] {
+  const sections: FreeTextSection[] = [{ heading: "", body: "" }];
+  for (const line of freeText.split("\n")) {
+    if (/^###\s/.test(line.trim())) {
+      sections.push({ heading: line.trim(), body: "" });
+      continue;
+    }
+    const current = sections[sections.length - 1];
+    if (current) {
+      current.body = current.body ? `${current.body}\n${line}` : line;
+    }
+  }
+  return sections
+    .map((section) => ({ heading: section.heading, body: section.body.trim() }))
+    .filter((section) => section.heading || section.body);
+}
+
+/** Free-text sections that hold sample speech; the others describe the character in prose. */
+const SAMPLE_SECTION = /^###\s*(?:本人の発言|会話の見本|セリフ例|名台詞|最初の挨拶|会話例)/;
+
+/**
+ * Sample lines (「…」) taken in turn from each quote and dialogue section (the whole free text for
+ * sheets without them); small models imitate examples better than descriptions.
+ */
 export function extractSampleLines(sheet: string, max = 6): string[] {
   const { freeText } = parsePartnerSheet(sheet);
-  const lines = [...freeText.matchAll(/「([^「」\n]{2,80})」/g)].map((m) => m[1]?.trim() ?? "");
-  return [...new Set(lines.filter(Boolean))].slice(0, max);
+  const sampleSections = splitFreeTextSections(freeText).filter((section) =>
+    SAMPLE_SECTION.test(section.heading),
+  );
+  const pools = (sampleSections.length > 0 ? sampleSections.map((s) => s.body) : [freeText]).map(
+    (text) => [...text.matchAll(/「([^「」\n]{2,80})」/g)].map((m) => m[1]?.trim() ?? ""),
+  );
+  const lines: string[] = [];
+  for (let index = 0; pools.some((pool) => index < pool.length); index++) {
+    for (const pool of pools) {
+      const line = pool[index];
+      if (line) {
+        lines.push(line);
+      }
+    }
+  }
+  return [...new Set(lines)].slice(0, max);
 }
 
 const FIRST_PERSON_PRONOUNS = [
@@ -294,6 +340,13 @@ const FIRST_PERSON_PRONOUNS = [
   "ワタシ",
 ];
 
+/** Spellings of one pronoun; a sheet saying 「ぼく」 still allows 僕 and ボク. */
+const PRONOUN_SPELLINGS = [
+  ["僕", "ぼく", "ボク"],
+  ["俺", "おれ", "オレ"],
+  ["私", "わたし", "ワタシ"],
+];
+
 /** First-person pronouns in `reply` that contradict the sheet's 一人称 (e.g. 僕 for a 俺 character). */
 export function findFirstPersonDrift(reply: string, firstPerson: string | undefined): string[] {
   const expected = firstPerson?.trim();
@@ -301,6 +354,13 @@ export function findFirstPersonDrift(reply: string, firstPerson: string | undefi
     return [];
   }
   const allowed = new Set(expected.split(/[、,／/・\s]+/).filter(Boolean));
+  for (const spellings of PRONOUN_SPELLINGS) {
+    if (spellings.some((spelling) => [...allowed].some((a) => a.includes(spelling)))) {
+      for (const spelling of spellings) {
+        allowed.add(spelling);
+      }
+    }
+  }
   // Quoted speech of others may use any pronoun; only check the partner's own narration.
   const ownText = reply.replace(/「[^」]*」/g, "");
   return FIRST_PERSON_PRONOUNS.filter(
@@ -310,22 +370,35 @@ export function findFirstPersonDrift(reply: string, firstPerson: string | undefi
   );
 }
 
-/** The partner's full character prompt: persona, sheet directives, relationship stage and sample lines. */
-export async function buildPartnerCharacterPrompt(partner: PartnerProfile): Promise<string> {
+/** Character prompt size for one partner's system prompt unless a caller needs it smaller. */
+export const DEFAULT_CHARACTER_PROMPT_CHARS = 6_000;
+const GROUP_CHAT_CHARACTER_PROMPT_CHARS = 3_000;
+
+/**
+ * The partner's character prompt (persona, sheet directives, relationship stage, sample lines)
+ * within `maxChars`: when a rich sheet does not fit, the parts that shape the voice are kept.
+ */
+export async function buildPartnerCharacterPrompt(
+  partner: PartnerProfile,
+  options: { maxChars?: number } = {},
+): Promise<string> {
   const sheet = await loadPartnerCharacterSheet(partner);
   const bond = await loadPartnerBond(partner.id).catch(() => undefined);
   const samples = extractSampleLines(sheet);
-  return [
-    compileCharacterDirectivesForLLM(partner, sheet),
-    bond
-      ? `\n■ ユーザーとの今の関係（絆レベル${bond.level}「${bond.title}」）:\n- ${bondRelationshipDirective(bond)}`
-      : "",
-    samples.length > 0
-      ? `\n■ 話し方のお手本（この口調・語彙・テンポをそのまま真似ること）:\n${samples.map((line) => `「${line}」`).join("\n")}`
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const sections = compileCharacterSections(partner, sheet);
+  if (bond) {
+    sections.push({
+      priority: 8,
+      text: `\n■ ユーザーとの今の関係（絆レベル${bond.level}「${bond.title}」）:\n- ${bondRelationshipDirective(bond)}`,
+    });
+  }
+  if (samples.length > 0) {
+    sections.push({
+      priority: 9,
+      text: `\n■ 話し方のお手本（この口調・語彙・テンポをそのまま真似ること）:\n${samples.map((line) => `「${line}」`).join("\n")}`,
+    });
+  }
+  return fitPromptSections(sections, options.maxChars ?? DEFAULT_CHARACTER_PROMPT_CHARS);
 }
 
 export async function findPartnerProfile(partnerId: string): Promise<PartnerProfile | undefined> {
@@ -361,35 +434,90 @@ const ATTRIBUTE_GUIDELINES_MANUAL = `
 しかし、ユーザーが現在のチャットメッセージの中で具体的にお願いや指示（例：「今は敬語をやめて」「もっと短く答えて」「〇〇になりきって」「このWebページの内容を要約して」「〜を調べて」など）を出した場合、設定シートの内容よりも【ユーザーのチャット内での指示・お願いを最優先】して柔軟に従ってください！
 `;
 
-// キャラクターシートから設定済み項目のみを抽出し、LLMが確実に理解・演技できる具体的指示にコンパイルする
-export function compileCharacterDirectivesForLLM(
-  partner: PartnerProfile,
-  rawSheet: string,
-): string {
+type PromptSection = { text: string; priority: number };
+
+/**
+ * Fits ordered prompt sections into `maxChars`: the lowest-priority section (the later one on a
+ * tie) is shortened at a line break, or dropped when little of it would remain.
+ */
+export function fitPromptSections(sections: PromptSection[], maxChars: number): string {
+  const kept = sections.filter((section) => section.text.trim());
+  const size = () => kept.reduce((sum, section) => sum + section.text.length + 1, 0);
+  while (kept.length > 0 && size() > maxChars) {
+    let lowest = 0;
+    for (let index = 1; index < kept.length; index++) {
+      if ((kept[index]?.priority ?? 0) <= (kept[lowest]?.priority ?? 0)) {
+        lowest = index;
+      }
+    }
+    const section = kept[lowest];
+    if (!section) {
+      break;
+    }
+    const room = section.text.length - (size() - maxChars);
+    if (room >= 200) {
+      const cut = section.text.lastIndexOf("\n", room);
+      section.text = section.text.slice(0, cut > room / 2 ? cut : room);
+      break;
+    }
+    kept.splice(lowest, 1);
+  }
+  return kept.map((section) => section.text).join("\n");
+}
+
+/** How much each free-text section matters to the voice; null leaves it out of the prompt. */
+function freeTextPriority(heading: string): number | null {
+  if (/出典/.test(heading)) {
+    return null;
+  }
+  if (/修正メモ|ユーザーの要望|実在の人物/.test(heading)) {
+    return 10;
+  }
+  if (/話し方|口調/.test(heading)) {
+    return 9;
+  }
+  if (/人物像|概要/.test(heading)) {
+    return 8;
+  }
+  if (/会話の見本|セリフ例|会話例|最初の挨拶|演じる上での注意/.test(heading)) {
+    return 7;
+  }
+  if (/本人の発言|名台詞/.test(heading)) {
+    return 6;
+  }
+  return 5;
+}
+
+/**
+ * The sheet compiled into prioritized prompt sections: set attributes become concrete acting
+ * directives, free-text sections follow, and a real-person partner gets its rules first.
+ */
+function compileCharacterSections(partner: PartnerProfile, rawSheet: string): PromptSection[] {
   // （未設定）や空文字は排除し、LLMへのアテンションノイズをなくす。項目外の文章は自由記述として残す。
   const parsed = parsePartnerSheet(rawSheet);
   const attrs: Record<string, string> = Object.fromEntries(parsed.attributes);
-  const personaSection = partner.persona?.trim()
-    ? `【あなたのキャラクター設定（ペルソナ・基本設定）】\n${partner.persona.trim()}`
-    : "";
-  const freeTextSection = parsed.freeText
-    ? `\n■ 自由記述（原作の設定・口調の具体例・補足。項目より詳しい場合はこちらを優先）:\n${parsed.freeText}`
-    : "";
-
-  const keys = Object.keys(attrs);
-  if (keys.length === 0) {
-    return [personaSection, freeTextSection].filter(Boolean).join("\n");
+  const sections: PromptSection[] = [];
+  if (partner.realPerson) {
+    sections.push({
+      priority: 10,
+      text: `【${REAL_PERSON_SECTION_TITLE}】\n${REAL_PERSON_RULES}\n`,
+    });
+  }
+  // The persona is often the most detailed source (agent-written canon summaries); never drop it
+  // before the attribute lists.
+  if (partner.persona?.trim()) {
+    sections.push({
+      priority: 9,
+      text: `【あなたのキャラクター設定（ペルソナ・基本設定）】\n${partner.persona.trim()}\n`,
+    });
   }
 
-  const sections: string[] = [];
-  // The persona is often the most detailed source (agent-written canon summaries); never drop it.
-  if (personaSection) {
-    sections.push(personaSection, "");
+  if (Object.keys(attrs).length > 0) {
+    sections.push({
+      priority: 10,
+      text: `【あなたのキャラクター設定（ロールプレイ演技指示）】\nあなたは「${partner.name}」です。以下の設定項目（言葉遣い、性格、ユーザーへの態度等）を完璧に意識し、完全にこのキャラクターになりきって話してください。\n※未設定の項目については無理に言及せず、設定されている以下の特徴を最大限に活かして会話してください。`,
+    });
   }
-  sections.push(`【あなたのキャラクター設定（ロールプレイ演技指示）】`);
-  sections.push(
-    `あなたは「${partner.name}」です。以下の設定項目（言葉遣い、性格、ユーザーへの態度等）を完璧に意識し、完全にこのキャラクターになりきって話してください。\n※未設定の項目については無理に言及せず、設定されている以下の特徴を最大限に活かして会話してください。`,
-  );
 
   // 1. 言葉遣い・話し方・呼び方（最重要）
   const speechDirectives: string[] = [];
@@ -403,15 +531,17 @@ export function compileCharacterDirectivesForLLM(
     );
   if (attrs["語尾の癖"])
     speechDirectives.push(`- 語尾の特徴: 「${attrs["語尾の癖"]}」を自然に多用して話してください。`);
-  if (attrs["よく使う癖"]) speechDirectives.push(`- 口癖・頻出表現: 「${attrs["よく使う癖"]}」`);
+  if (attrs["よく使う口癖"])
+    speechDirectives.push(`- 口癖・頻出表現: 「${attrs["よく使う口癖"]}」`);
   if (attrs["言葉のフォーマルさ"])
     speechDirectives.push(`- 話し方のトーン・敬語: ${attrs["言葉のフォーマルさ"]}`);
   if (attrs["絵文字・顔文字の頻度"])
     speechDirectives.push(`- 絵文字の使用頻度: ${attrs["絵文字・顔文字の頻度"]}`);
   if (speechDirectives.length > 0) {
-    sections.push(
-      `\n■ 話し方・言葉遣い（★最重要・1文字たりともブレずに厳守すること）:\n${speechDirectives.join("\n")}`,
-    );
+    sections.push({
+      priority: 10,
+      text: `\n■ 話し方・言葉遣い（★最重要・1文字たりともブレずに厳守すること）:\n${speechDirectives.join("\n")}`,
+    });
   }
 
   // 2. ユーザーとの関係性・態度（最重要）
@@ -433,9 +563,10 @@ export function compileCharacterDirectivesForLLM(
   if (attrs["ユーザーとの約束"])
     relationDirectives.push(`- ユーザーとの大切な約束: 「${attrs["ユーザーとの約束"]}」`);
   if (relationDirectives.length > 0) {
-    sections.push(
-      `\n■ ユーザー（相手）に対する態度・感情表現（★好意や距離感を反映すること）:\n${relationDirectives.join("\n")}`,
-    );
+    sections.push({
+      priority: 8,
+      text: `\n■ ユーザー（相手）に対する態度・感情表現（★好意や距離感を反映すること）:\n${relationDirectives.join("\n")}`,
+    });
   }
 
   // 3. 性格・内面
@@ -454,7 +585,10 @@ export function compileCharacterDirectivesForLLM(
     personalityDirectives.push(`- ユーモア: ${attrs["ユーモアのセンス"]}`);
   if (attrs["警戒心"]) personalityDirectives.push(`- 警戒心: ${attrs["警戒心"]}`);
   if (personalityDirectives.length > 0) {
-    sections.push(`\n■ あなたの内面・性格:\n${personalityDirectives.join("\n")}`);
+    sections.push({
+      priority: 6,
+      text: `\n■ あなたの内面・性格:\n${personalityDirectives.join("\n")}`,
+    });
   }
 
   // 4. 外見・基本プロファイル
@@ -470,18 +604,18 @@ export function compileCharacterDirectivesForLLM(
     visualDirectives.push(`- 持ち物・トレードマーク: ${attrs["トレードマーク・持ち物"]}`);
   if (attrs["身体的特徴"]) visualDirectives.push(`- 身体的特徴: ${attrs["身体的特徴"]}`);
   if (visualDirectives.length > 0) {
-    sections.push(
-      `\n■ 外見・ビジュアル（しぐさや比喩表現に活かすこと）:\n${visualDirectives.join("\n")}`,
-    );
+    sections.push({
+      priority: 4,
+      text: `\n■ 外見・ビジュアル（しぐさや比喩表現に活かすこと）:\n${visualDirectives.join("\n")}`,
+    });
   }
 
   // 5. 生い立ち・能力・好みなどその他の有効な設定項目
-  const otherItems: string[] = [];
   const handledLabels = new Set([
     "一人称",
     "ユーザーの呼び方",
     "語尾の癖",
-    "よく使う癖",
+    "よく使う口癖",
     "言葉のフォーマルさ",
     "絵文字・顔文字の頻度",
     "距離感",
@@ -513,21 +647,34 @@ export function compileCharacterDirectivesForLLM(
     "トレードマーク・持ち物",
     "身体的特徴",
   ]);
-  for (const [lbl, val] of Object.entries(attrs)) {
-    if (!handledLabels.has(lbl)) {
-      otherItems.push(`- ${lbl}: ${val}`);
-    }
-  }
+  const otherItems = Object.entries(attrs)
+    .filter(([label]) => !handledLabels.has(label))
+    .map(([label, value]) => `- ${label}: ${value}`);
   if (otherItems.length > 0) {
-    sections.push(
-      `\n■ その他の設定詳細（生い立ち・スキル・価値観・出力ルール等）:\n${otherItems.join("\n")}`,
-    );
-  }
-  if (freeTextSection) {
-    sections.push(freeTextSection);
+    sections.push({
+      priority: 3,
+      text: `\n■ その他の設定詳細（生い立ち・スキル・価値観・出力ルール等）:\n${otherItems.join("\n")}`,
+    });
   }
 
-  return sections.join("\n");
+  const freeSections = splitFreeTextSections(parsed.freeText).flatMap((section) => {
+    // The partner flag already put the real-person rules first.
+    const priority =
+      partner.realPerson && section.heading.includes(REAL_PERSON_SECTION_TITLE)
+        ? null
+        : freeTextPriority(section.heading);
+    return priority === null
+      ? []
+      : [{ priority, text: [section.heading, section.body].filter(Boolean).join("\n") }];
+  });
+  if (freeSections.length > 0) {
+    sections.push({
+      priority: 10,
+      text: "\n■ 自由記述（原作の設定・口調の具体例・補足。項目より詳しい場合はこちらを優先）:",
+    });
+    sections.push(...freeSections);
+  }
+  return sections;
 }
 
 // 簡易HTMLテキスト抽出ヘルパー
@@ -667,8 +814,10 @@ async function generatePartnerReply(
   conversationHistory: Array<{ sender: string; content: string; isUser?: boolean }>,
   promptExtra?: string,
 ): Promise<string> {
-  const characterSheet = await loadPartnerCharacterSheet(partner);
-  const characterProfileSection = compileCharacterDirectivesForLLM(partner, characterSheet);
+  // The group model runs with an 8K context shared by this prompt and the recent turns.
+  const characterProfileSection = await buildPartnerCharacterPrompt(partner, {
+    maxChars: GROUP_CHAT_CHARACTER_PROMPT_CHARS,
+  });
 
   const systemPrompt = `あなたは「${partner.name}」です。
 以下のキャラクター設定を徹底して演じ、自然に会話してください。
@@ -783,6 +932,7 @@ export const partnersHandlers: GatewayRequestHandlers = {
         modelId: data.modelId || "ollama/qwen2.5:latest",
         reasoningEffort: data.reasoningEffort || "none",
         characterSheet: data.characterSheet || "",
+        ...(data.realPerson === true ? { realPerson: true } : {}),
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
@@ -834,6 +984,9 @@ export const partnersHandlers: GatewayRequestHandlers = {
         ...(data.modelId ? { modelId: data.modelId } : {}),
         ...(data.reasoningEffort ? { reasoningEffort: data.reasoningEffort } : {}),
         ...(data.characterSheet !== undefined ? { characterSheet: data.characterSheet } : {}),
+        ...(typeof data.realPerson === "boolean"
+          ? { realPerson: data.realPerson || undefined }
+          : {}),
         updatedAt: Date.now(),
       };
       await savePartners(partners);
@@ -1863,6 +2016,8 @@ export async function savePartnerProfileWithSheet(params: {
   name: string;
   persona: string;
   characterSheet: string;
+  /** Set by research that found the subject is a real person; left unchanged when omitted. */
+  realPerson?: boolean;
 }): Promise<PartnerProfile> {
   const partners = await loadPartners();
   const now = Date.now();
@@ -1875,6 +2030,9 @@ export async function savePartnerProfileWithSheet(params: {
     existing.name = params.name.trim() || existing.name;
     existing.persona = params.persona.trim() || existing.persona;
     existing.characterSheet = params.characterSheet;
+    if (params.realPerson !== undefined) {
+      existing.realPerson = params.realPerson || undefined;
+    }
     existing.updatedAt = now;
     saved = existing;
   } else {
@@ -1886,6 +2044,7 @@ export async function savePartnerProfileWithSheet(params: {
       modelId: "ollama/qwen2.5:latest",
       reasoningEffort: "none",
       characterSheet: params.characterSheet,
+      ...(params.realPerson ? { realPerson: true } : {}),
       createdAt: now,
       updatedAt: now,
     };

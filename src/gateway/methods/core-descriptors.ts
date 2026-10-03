@@ -710,6 +710,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["partner.main.set", "partners", "operator.write", "2026.10"],
   ["partner.feedback.add", "partners", "operator.write", "2026.10"],
   ["partner.import.card", "partners", "operator.write", "2026.10"],
+  ["partner.research.create", "partners", "operator.write", "2026.10"],
   ["partner.facts.extract", "partners", "operator.write", "2026.9"],
   ["partner.facts.get", "partners", "operator.read", "2026.9"],
   ["partner.facts.update", "partners", "operator.write", "2026.9"],

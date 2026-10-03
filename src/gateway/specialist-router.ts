@@ -327,6 +327,8 @@ export async function executeSpecialistTask(params: {
   maxTokens?: number;
   temperature?: number;
   timeoutMs?: number;
+  /** false asks the worker's chat template to skip the reasoning phase. */
+  thinking?: boolean;
 }): Promise<{
   text: string;
   workerPort: number;
@@ -358,6 +360,8 @@ export async function executeSpecialistTask(params: {
     messages,
     max_tokens: params.maxTokens ?? 2048,
     temperature: params.temperature ?? 0.7,
+    // Gemma 4 thinks first by default; with a token budget its answer can come back empty.
+    ...(params.thinking === false ? { chat_template_kwargs: { enable_thinking: false } } : {}),
   };
 
   // CPU workers are slow; bound the wait so a stuck worker cannot hold the delegation forever.

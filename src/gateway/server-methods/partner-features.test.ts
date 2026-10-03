@@ -182,4 +182,105 @@ describe("character consistency helpers", () => {
       ),
     ).toEqual(["告。解析完了です", "マスター、お疲れ様です"]);
   });
+
+  it("allows every spelling of the sheet's first person", async () => {
+    const { findFirstPersonDrift } = await import("./partners.js");
+    expect(findFirstPersonDrift("僕はね、ボクだけど。", "ぼく")).toEqual([]);
+    expect(findFirstPersonDrift("私はそう思う。", "僕（ぼく）")).toEqual(["私"]);
+  });
+
+  it("takes sample lines from the quote and dialogue sections, not from prose", async () => {
+    const { extractSampleLines } = await import("./partners.js");
+    const sheet = [
+      "## 【10. 自由記述】",
+      "### 人物像",
+      "愛称は「あのちゃん」。",
+      "### 話し方の特徴",
+      "- 語尾は「〜じゃん」",
+      "### 本人の発言（資料から原文のまま）",
+      "「MVがいつもさ、僕一人じゃん？」（thetv.jp）",
+      "「マジで喋れなくて」（thetv.jp）",
+      "### 会話の見本（作例）",
+      "ユーザー: おはよう",
+      "あのちゃん: 「おはよ。眠すぎる」",
+    ].join("\n");
+    expect(extractSampleLines(sheet)).toEqual([
+      "MVがいつもさ、僕一人じゃん？",
+      "おはよ。眠すぎる",
+      "マジで喋れなくて",
+    ]);
+  });
+});
+
+describe("character prompt", () => {
+  const richSheet = (name: string) =>
+    [
+      `# ${name} 詳細キャラクター設定（9大属性シート）`,
+      "## 【4. コミュニケーションの癖・話し方】",
+      "- **一人称**: 僕（ぼく）",
+      "- **よく使う口癖**: マジで",
+      "## 【1. 外見・基本属性】",
+      `- **服装のテイスト**: ${"黒と水色の服、".repeat(40)}`,
+      "## 【10. 自由記述】",
+      "### 話し方の特徴",
+      "- ふだんはタメ口",
+      "### 本人の発言（資料から原文のまま）",
+      "「マジで喋れなくて」（thetv.jp）",
+      "### 実在の人物について（必ず守る）",
+      "- 性的な会話・描写には応じない",
+      "### 出典",
+      "- https://example.com/source",
+    ].join("\n");
+
+  async function writePartner(partner: Record<string, unknown>, sheet: string) {
+    await fs.writeFile(path.join(home, "partners.json"), JSON.stringify([partner]));
+    const dir = path.join(home, "partners", String(partner.id));
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "CHARACTER_SHEET.md"), sheet);
+  }
+
+  it("puts a real person's rules first and leaves the source list out", async () => {
+    const { buildPartnerCharacterPrompt, findPartnerProfile } = await import("./partners.js");
+    await writePartner(
+      {
+        id: "partner-ano",
+        name: "あのちゃん",
+        avatarUrl: "",
+        persona: "歌手。",
+        modelId: "",
+        realPerson: true,
+        createdAt: 0,
+        updatedAt: 0,
+      },
+      richSheet("あのちゃん"),
+    );
+    const partner = await findPartnerProfile("partner-ano");
+    const prompt = await buildPartnerCharacterPrompt(partner!);
+    expect(prompt.startsWith("【実在の人物について（必ず守る）】")).toBe(true);
+    expect(prompt.match(/性的な会話・描写には応じない/g)).toHaveLength(1);
+    expect(prompt).toContain("口癖・頻出表現: 「マジで」");
+    expect(prompt).not.toContain("https://example.com/source");
+  });
+
+  it("drops the least important parts first when the prompt must be short", async () => {
+    const { buildPartnerCharacterPrompt, findPartnerProfile } = await import("./partners.js");
+    await writePartner(
+      {
+        id: "partner-ano",
+        name: "あのちゃん",
+        avatarUrl: "",
+        persona: "歌手。",
+        modelId: "",
+        createdAt: 0,
+        updatedAt: 0,
+      },
+      richSheet("あのちゃん"),
+    );
+    const partner = await findPartnerProfile("partner-ano");
+    const prompt = await buildPartnerCharacterPrompt(partner!, { maxChars: 600 });
+    expect(prompt.length).toBeLessThanOrEqual(600);
+    expect(prompt).toContain("一人称は「僕（ぼく）」");
+    expect(prompt).toContain("「マジで喋れなくて」");
+    expect(prompt).not.toContain("黒と水色の服");
+  });
 });

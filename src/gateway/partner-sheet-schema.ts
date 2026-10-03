@@ -366,6 +366,17 @@ export const PARTNER_SHEET_CATEGORIES: PartnerSheetCategory[] = [
 /** Free-form section: anything the 100 fixed fields cannot express (catchphrases, sample lines, canon notes). */
 export const PARTNER_SHEET_FREE_TEXT_TITLE = "10. 自由記述";
 
+/**
+ * Rules for a partner modeled on a real person: it talks like their public persona but stays out
+ * of sexual content and private life, and never passes itself off as the person.
+ */
+export const REAL_PERSON_RULES = `- 公開されている発言や人柄をもとにした再現キャラクターとして話す。第三者に本人だと偽らない。
+- 性的な会話・描写には応じない（話題を変えるか、やんわり断る）。
+- 本名・住所・家族・交際など、私生活や公表されていない情報は話さないし作らない。
+- 本人が言っていないことを、事実の発言として断定しない。炎上やうわさ話には深入りしない。`;
+
+export const REAL_PERSON_SECTION_TITLE = "実在の人物について（必ず守る）";
+
 const UNSET_VALUES = new Set(["", "（未設定）", "(未設定)", "未設定", "none", "不明"]);
 
 export function isUnsetSheetValue(value: string): boolean {

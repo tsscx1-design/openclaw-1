@@ -8,6 +8,8 @@ export type SpecialistJob = {
   title: string;
   workerName: string;
   status: SpecialistJobStatus;
+  /** What a long job is doing right now (shown while it runs). */
+  stage?: string;
   startedAt: number;
   finishedAt?: number;
   resultPreview?: string;
@@ -34,11 +36,18 @@ export function startSpecialistJob(
   return job;
 }
 
+export function setSpecialistJobStage(job: SpecialistJob, stage: string): void {
+  if (job.status === "running") {
+    job.stage = stage.slice(0, 200);
+  }
+}
+
 export function finishSpecialistJob(
   job: SpecialistJob,
   outcome: { resultPreview?: string; error?: string },
 ): void {
   job.status = outcome.error ? "failed" : "completed";
+  job.stage = undefined;
   job.finishedAt = Date.now();
   if (outcome.resultPreview) {
     job.resultPreview = outcome.resultPreview.slice(0, 600);

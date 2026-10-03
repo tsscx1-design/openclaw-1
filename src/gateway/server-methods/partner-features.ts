@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
+import { createWebFetchTool, createWebSearchTool } from "../../agents/tools/web-tools.js";
 import {
   getAvatarJob,
   imageStudioStatus,
@@ -20,6 +21,11 @@ import {
   visionReady,
   type AlbumItem,
 } from "../partner-album.js";
+import {
+  createPartnerFromResearch,
+  researchIoFromTools,
+  sanitizePartnerCreationRequest,
+} from "../partner-creation.js";
 import {
   getTodaysFortune,
   loadDailySettings,
@@ -48,6 +54,11 @@ import {
 } from "../partner-store.js";
 import { listTtsSpeakers, sanitizePartnerVoice, synthesizeSpeech } from "../partner-tts.js";
 import { listCloneVoices, synthesizeCloneSpeech } from "../partner-voice-clone.js";
+import {
+  finishSpecialistJob,
+  setSpecialistJobStage,
+  startSpecialistJob,
+} from "../specialist-jobs.js";
 import { executeSpecialistTask } from "../specialist-router.js";
 import { cleanGeneratedText, isFailedReplyText } from "../text-hygiene.js";
 import { designVoiceDraft, draftPath, sanitizeVoiceCaption } from "../voice-design.js";
@@ -227,7 +238,9 @@ export async function resolveMainChatPartnerSystemContext(): Promise<string | un
   if (!partner) {
     return undefined;
   }
-  const character = clip(await buildPartnerCharacterPrompt(partner), MAIN_CHAT_PERSONA_MAX_CHARS);
+  const character = await buildPartnerCharacterPrompt(partner, {
+    maxChars: MAIN_CHAT_PERSONA_MAX_CHARS,
+  });
   return `## パートナー人格（メインチャット）
 あなたは今、ユーザーのAIパートナー「${partner.name}」として話しています。
 - ツール・調査・ファイル操作などOpenClawとしての能力はそのまま使ってよい。作業報告や結果の説明もこのキャラクターの口調で行う。
@@ -1100,6 +1113,44 @@ ${userInput.slice(0, 2000)}`,
       characterSheet: updated,
     });
     respond(true, { success: true }, undefined);
+  }),
+
+  // --- Web調査でパートナー作成（エージェントのツールと同じ流れ、アプリから直接） ---
+  "partner.research.create": guarded(async (params, respond, ctx) => {
+    const request = sanitizePartnerCreationRequest(params);
+    if (!request) {
+      fail(respond, "Missing name");
+      return;
+    }
+    if (request.partnerId && !(await findPartnerProfile(request.partnerId))) {
+      fail(respond, `Partner not found: ${request.partnerId}`);
+      return;
+    }
+    const config = ctx.context.getRuntimeConfig();
+    const io = researchIoFromTools({
+      webFetchTool: createWebFetchTool({ config, lateBindRuntimeConfig: true }),
+      webSearchTool: createWebSearchTool({ config, lateBindRuntimeConfig: true }),
+    });
+    const label = request.source ? `${request.name}（${request.source}）` : request.name;
+    const job = startSpecialistJob({
+      kind: "partner-create",
+      title: `パートナー作成: ${label}`,
+      workerName: "パートナー調査（Web調査＋ローカルLLM）",
+    });
+    respond(true, { jobId: job.id, status: job.status }, undefined);
+    void createPartnerFromResearch({
+      ...request,
+      io,
+      onProgress: (message) => setSpecialistJobStage(job, message),
+    })
+      .then((result) =>
+        finishSpecialistJob(job, {
+          resultPreview: `${result.name}（${result.partnerId}）: ${result.filled}/${result.total}項目、資料${result.sourceCount}件（${result.sites.join("、")}）、発言${result.quoteCount}件、${Math.round(result.durationMs / 1000)}秒`,
+        }),
+      )
+      .catch((err) =>
+        finishSpecialistJob(job, { error: err instanceof Error ? err.message : String(err) }),
+      );
   }),
 
   // --- キャラクターカード取り込み ---
