@@ -1377,6 +1377,13 @@ class MainViewModel private constructor(
     return ensureRuntime().runGatewayRpc(method, paramsJson, timeoutMs)
   }
 
+  /** Swaps the group chat model back to the main model; outlives the closing group chat screen. */
+  fun leaveGroupChatModel() {
+    viewModelScope.launch {
+      runCatching { runGatewayRpc(ai.openclaw.app.gateway.GatewayMethod.GroupchatLeave, "{}", timeoutMs = 300_000) }
+    }
+  }
+
   fun exportClientBackup(): String = prefs.exportBackupPackage()
 
   fun importClientBackup(jsonString: String): Boolean {

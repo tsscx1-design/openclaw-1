@@ -53,19 +53,24 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -77,6 +82,8 @@ data class GroupMessage(
   val isUser: Boolean,
   val avatarUrl: String? = null,
   val timestamp: Long = System.currentTimeMillis(),
+  /** Who spoke, so the reply can be read aloud in that partner's own voice. */
+  val partnerId: String? = null,
 )
 
 @Composable
@@ -99,6 +106,79 @@ internal fun GroupChatScreen(
   var nextDesignatedPartnerId by remember { mutableStateOf<String?>(null) }
   var pendingInterruptionText by remember { mutableStateOf<String?>(null) }
   var loopJob by remember { mutableStateOf<Job?>(null) }
+
+  // Reading aloud: each reply in its partner's own PC voice, one at a time (never overlapping).
+  val context = LocalContext.current
+  val voicePrefs = remember { context.getSharedPreferences("partner_voice", android.content.Context.MODE_PRIVATE) }
+  var groupAutoRead by remember { mutableStateOf(voicePrefs.getBoolean("group_auto_read", false)) }
+  val playingKey by PartnerVoicePlayer.playingKey.collectAsState()
+  val voiceQueue = remember { Channel<GroupMessage>(Channel.UNLIMITED) }
+  /** Replies queued or playing; the loop lets the next reply be written while one plays. */
+  var voicePending by remember { mutableStateOf(0) }
+
+  // The group chat runs its own model on the PC (Bonsai is swapped out while it is open).
+  var groupModels by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+  var groupModelId by remember { mutableStateOf("") }
+  var modelReady by remember { mutableStateOf(false) }
+  var modelStatus by remember { mutableStateOf("") }
+
+  fun enterGroupModel() {
+    coroutineScope.launch {
+      modelReady = false
+      modelStatus = "マルチチャット用のモデルを準備中…（30秒ほど）"
+      try {
+        val res = JSONObject(viewModel.runGatewayRpc(GatewayMethod.GroupchatEnter, "{}", timeoutMs = 300_000))
+        modelStatus =
+          when {
+            res.optBoolean("busy") -> "画像・動画の生成中のため、いつものモデルで話します"
+            res.optString("modelId") == "main" -> "いつものモデルで話します"
+            else -> ""
+          }
+      } catch (e: Exception) {
+        modelStatus = "モデルの準備に失敗しました: ${e.message}"
+      } finally {
+        modelReady = true
+      }
+    }
+  }
+
+  LaunchedEffect(Unit) {
+    runCatching {
+      val res = JSONObject(viewModel.runGatewayRpc(GatewayMethod.GroupchatModels, "{}"))
+      val arr = res.optJSONArray("models") ?: JSONArray()
+      groupModels =
+        listOf("main" to "いつものモデル") +
+          (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.map { it.optString("id") to it.optString("label") }
+      groupModelId = res.optString("current")
+    }
+    enterGroupModel()
+  }
+
+  LaunchedEffect(Unit) {
+    for (msg in voiceQueue) {
+      val pid = msg.partnerId
+      if (pid != null && groupAutoRead) {
+        try {
+          if (PartnerVoicePlayer.speak(context, viewModel, pid, msg.content, key = msg.id)) {
+            PartnerVoicePlayer.playingKey.first { it != msg.id }
+          }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+          throw e
+        } catch (_: Exception) {
+          // A partner without a PC voice is simply not read aloud.
+        }
+      }
+      voicePending = (voicePending - 1).coerceAtLeast(0)
+    }
+  }
+
+  fun stopVoice() {
+    while (voiceQueue.tryReceive().isSuccess) {
+      // Drop replies that were waiting to be read.
+    }
+    voicePending = 0
+    PartnerVoicePlayer.stop()
+  }
 
   // メッセージ追加またはAI思考時の自動スクロール
   LaunchedEffect(messages.size, thinkingPartnerName) {
@@ -148,6 +228,9 @@ internal fun GroupChatScreen(
     onDispose {
       isLoopRunning = false
       loopJob?.cancel()
+      PartnerVoicePlayer.stop()
+      // Bring the main model (Bonsai) back for the 1:1 and agent chats.
+      viewModel.leaveGroupChatModel()
     }
   }
 
@@ -162,6 +245,7 @@ internal fun GroupChatScreen(
     isLoopRunning = false
     loopJob?.cancel()
     thinkingPartnerName = null
+    stopVoice()
   }
 
   fun startLoop() {
@@ -170,6 +254,8 @@ internal fun GroupChatScreen(
 
     loopJob = coroutineScope.launch {
       while (isLoopRunning) {
+        // While one reply is read aloud the next one is written; wait if more are queued.
+        if (groupAutoRead) snapshotFlow { voicePending }.first { it <= 1 }
         try {
           // 割り込みメッセージの取得
           val interruption = pendingInterruptionText
@@ -222,16 +308,23 @@ internal fun GroupChatScreen(
           val avatarUrl = replyObj?.optString("avatarUrl")?.takeIf { it.isNotBlank() }
             ?: obj.optString("avatarUrl", "")
           val nextId = obj.optString("nextDesignatedPartnerId", "").takeIf { it.isNotBlank() }
+          val speakerId = replyObj?.optString("partnerId")?.takeIf { it.isNotBlank() }
 
           if (content.isNotBlank()) {
-            messages = messages + GroupMessage(
+            val reply = GroupMessage(
               id = "partner-${System.currentTimeMillis()}",
               sender = senderName,
               content = content,
               isUser = false,
-              avatarUrl = avatarUrl
+              avatarUrl = avatarUrl,
+              partnerId = speakerId,
             )
+            messages = messages + reply
             nextDesignatedPartnerId = nextId
+            if (groupAutoRead && speakerId != null) {
+              voicePending += 1
+              voiceQueue.trySend(reply)
+            }
           }
         } catch (e: Exception) {
           messages = messages + GroupMessage(
@@ -405,8 +498,9 @@ internal fun GroupChatScreen(
             )
           } else {
             ClawPrimaryButton(
-              text = "▶ 会話開始",
-              onClick = { startLoop() }
+              text = if (modelReady) "▶ 会話開始" else "準備中…",
+              onClick = { startLoop() },
+              enabled = modelReady,
             )
           }
         }
@@ -453,6 +547,90 @@ internal fun GroupChatScreen(
             }
           }
         }
+      }
+
+      // 使うモデル（マルチチャット専用）と読み上げ
+      LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+      ) {
+        item {
+          Text("🧠 モデル", style = ClawTheme.type.caption.copy(fontSize = 11.sp), color = ClawTheme.colors.textMuted)
+        }
+        items(groupModels) { (id, label) ->
+          val selected = groupModelId == id
+          Box(
+            modifier = Modifier
+              .clip(RoundedCornerShape(12.dp))
+              .background(if (selected) ClawTheme.colors.primary.copy(alpha = 0.2f) else ClawTheme.colors.surfaceRaised)
+              .clickable(enabled = modelReady && !isLoopRunning && !selected) {
+                groupModelId = id
+                coroutineScope.launch {
+                  runCatching {
+                    viewModel.runGatewayRpc(GatewayMethod.GroupchatModelSet, JSONObject().put("modelId", id).toString())
+                  }
+                  if (id == "main") {
+                    viewModel.leaveGroupChatModel()
+                    modelStatus = "いつものモデルで話します"
+                  } else {
+                    enterGroupModel()
+                  }
+                }
+              }
+              .padding(horizontal = 10.dp, vertical = 5.dp),
+          ) {
+            Text(
+              text = label,
+              style = ClawTheme.type.caption.copy(fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal),
+              color = if (selected) ClawTheme.colors.primary else ClawTheme.colors.textMuted,
+            )
+          }
+        }
+      }
+      Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+      ) {
+        listOf(true to "🔊 いつも読む", false to "🔇 読まない").forEach { (on, label) ->
+          val selected = groupAutoRead == on
+          Box(
+            modifier = Modifier
+              .clip(RoundedCornerShape(12.dp))
+              .background(if (selected) ClawTheme.colors.primary.copy(alpha = 0.2f) else ClawTheme.colors.surfaceRaised)
+              .clickable {
+                groupAutoRead = on
+                voicePrefs.edit().putBoolean("group_auto_read", on).apply()
+                if (!on) stopVoice()
+              }
+              .padding(horizontal = 10.dp, vertical = 5.dp),
+          ) {
+            Text(
+              text = label,
+              style = ClawTheme.type.caption.copy(fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal),
+              color = if (selected) ClawTheme.colors.primary else ClawTheme.colors.textMuted,
+            )
+          }
+        }
+        if (playingKey != null || voicePending > 0) {
+          Box(
+            modifier = Modifier
+              .clip(RoundedCornerShape(12.dp))
+              .background(ClawTheme.colors.primary.copy(alpha = 0.2f))
+              .clickable { stopVoice() }
+              .padding(horizontal = 10.dp, vertical = 5.dp),
+          ) {
+            Text(
+              text = "⏹ 読み上げを止める",
+              style = ClawTheme.type.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
+              color = ClawTheme.colors.primary,
+            )
+          }
+        }
+      }
+      if (modelStatus.isNotBlank()) {
+        Text(modelStatus, style = ClawTheme.type.caption.copy(fontSize = 11.sp), color = ClawTheme.colors.primary)
       }
 
       // チャット履歴（Boxラップで最新ジャンプボタンをフロート表示）

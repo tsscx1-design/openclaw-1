@@ -8,6 +8,23 @@ const REPEATED_UNIT = /(.{1,40}?)\1{3,}/gsu;
 const SENTENCE_END = /(?<=[。！？!?…\n])/u;
 const FAILURE_PATTERN = /^（.{1,40}?(は考え中\.\.\.|の返信を作れませんでした[:：][\s\S]*)）$/u;
 
+/**
+ * Drops the speaker's own name at the start of a reply ("ルナ (Luna): …", "ルナ：…"), which
+ * role-play models copy from the group transcript.
+ */
+export function stripOwnNamePrefix(text: string, name: string): string {
+  const names = [...new Set([name, name.split(/[\s(（]/)[0] ?? ""])].filter(Boolean);
+  let out = text;
+  for (const candidate of names) {
+    const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(
+      new RegExp(`^\\s*${escaped}(?:\\s*[(（][^)）\\n]{1,30}[)）])?\\s*[:：]\\s*`, "u"),
+      "",
+    );
+  }
+  return out;
+}
+
 /** True for the placeholder text the server returns when a reply could not be generated. */
 export function isFailedReplyText(text: string): boolean {
   return FAILURE_PATTERN.test(text.trim());

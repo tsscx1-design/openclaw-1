@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { cleanGeneratedText, echoesEarlierLine, isFailedReplyText } from "./text-hygiene.js";
+import {
+  cleanGeneratedText,
+  echoesEarlierLine,
+  isFailedReplyText,
+  stripOwnNamePrefix,
+} from "./text-hygiene.js";
 
 describe("cleanGeneratedText", () => {
   it("leaves normal replies untouched", () => {
@@ -56,5 +61,20 @@ describe("echoesEarlierLine", () => {
   it("accepts a different reply and ignores very short ones", () => {
     expect(echoesEarlierLine("へえ、そうなんだ。私はお茶でも淹れてくるね。", earlier)).toBe(false);
     expect(echoesEarlierLine("うん", earlier)).toBe(false);
+  });
+});
+
+describe("stripOwnNamePrefix", () => {
+  it("drops the speaker's own name copied from the group transcript", () => {
+    expect(stripOwnNamePrefix("ルナ (Luna): わあ、楽しそう！", "ルナ (Luna)")).toBe(
+      "わあ、楽しそう！",
+    );
+    expect(stripOwnNamePrefix("ルナ：海がいいな", "ルナ (Luna)")).toBe("海がいいな");
+  });
+
+  it("keeps replies that only mention the name later", () => {
+    expect(stripOwnNamePrefix("ねえルナ：それどう思う？", "ルナ (Luna)")).toBe(
+      "ねえルナ：それどう思う？",
+    );
   });
 });

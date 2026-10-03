@@ -50,14 +50,19 @@ import { listTtsSpeakers, sanitizePartnerVoice, synthesizeSpeech } from "../part
 import { listCloneVoices, synthesizeCloneSpeech } from "../partner-voice-clone.js";
 import { executeSpecialistTask } from "../specialist-router.js";
 import { cleanGeneratedText, isFailedReplyText } from "../text-hygiene.js";
+import { designVoiceDraft, draftPath, sanitizeVoiceCaption } from "../voice-design.js";
 import {
   appendVoiceUpload,
+  createDesignedVoice,
   createVoiceProject,
   deleteVoiceProject,
   listVoiceProjects,
   loadVoiceStudioSettings,
   queueVoiceTraining,
+  readVoiceIcon,
+  renameVoiceProject,
   saveVoiceStudioSettings,
+  setVoiceIcon,
 } from "../voice-studio.js";
 import {
   analyzePartnerMood,
@@ -926,16 +931,65 @@ ${userInput.slice(0, 2000)}`,
         : s,
     );
     // Studio recordings can be imitated right away with Qwen3-TTS, before any night training.
-    respond(true, { speakers: [...(await listCloneVoices()), ...speakers] }, undefined);
+    const projects = new Map((await listVoiceProjects()).map((p) => [p.id, p]));
+    const clones = await Promise.all(
+      (await listCloneVoices()).map(async (clone) => {
+        const project = clone.voiceId ? projects.get(clone.voiceId) : undefined;
+        return { ...clone, iconBase64: project ? await readVoiceIcon(project) : undefined };
+      }),
+    );
+    respond(true, { speakers: [...clones, ...speakers] }, undefined);
   }),
 
   // --- 声作りスタジオ（本人の声 or 許可を得た声のみ） ---
   "voice.list": guarded(async (_params, respond) => {
+    const voices = await Promise.all(
+      (await listVoiceProjects()).map(async (v) => ({ ...v, iconBase64: await readVoiceIcon(v) })),
+    );
+    respond(true, { voices, settings: await loadVoiceStudioSettings() }, undefined);
+  }),
+  "voice.rename": guarded(async (params, respond) => {
     respond(
       true,
-      { voices: await listVoiceProjects(), settings: await loadVoiceStudioSettings() },
+      { voice: await renameVoiceProject(str(params, "voiceId") ?? "", str(params, "name") ?? "") },
       undefined,
     );
+  }),
+  "voice.icon.set": guarded(async (params, respond) => {
+    const voice = await setVoiceIcon(
+      str(params, "voiceId") ?? "",
+      str(params, "imageBase64") ?? "",
+    );
+    respond(true, { voice }, undefined);
+  }),
+  // Listen to a studio voice through voice cloning before giving it to a partner.
+  "voice.preview": guarded(async (params, respond) => {
+    const voiceId = str(params, "voiceId") ?? "";
+    const audio = await synthesizeCloneSpeech(
+      { engine: "clone", speakerId: 0, voiceId },
+      str(params, "text") ?? "こんにちは。今日もよろしくね。どんなお話をしようか。",
+    );
+    respond(true, { mimeType: "audio/wav", audioBase64: audio.toString("base64") }, undefined);
+  }),
+  // Voice design: a voice from a description, listened to as a draft before it is kept.
+  "voice.design.try": guarded(async (params, respond) => {
+    const { draftId, audio } = await designVoiceDraft(
+      str(params, "caption") ?? "",
+      str(params, "text"),
+    );
+    respond(
+      true,
+      { draftId, mimeType: "audio/wav", audioBase64: audio.toString("base64") },
+      undefined,
+    );
+  }),
+  "voice.design.save": guarded(async (params, respond) => {
+    const voice = await createDesignedVoice(
+      str(params, "name") ?? "",
+      sanitizeVoiceCaption(str(params, "caption") ?? ""),
+      draftPath(str(params, "draftId") ?? ""),
+    );
+    respond(true, { voice }, undefined);
   }),
   "voice.create": guarded(async (params, respond) => {
     respond(

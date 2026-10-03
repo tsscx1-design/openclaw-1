@@ -23,6 +23,12 @@ export type VoiceProject = {
   error?: string;
   /** AivisSpeech style id once installed. */
   speakerId?: number;
+  /** Picture shown next to the voice (file name inside the project folder). */
+  icon?: string;
+  /** "design" = made from a text description (no real speaker), else recordings. */
+  source?: "recording" | "design";
+  /** The description a designed voice was made from. */
+  caption?: string;
 };
 
 export type VoiceStudioSettings = { windowStartHour: number; windowEndHour: number };
@@ -140,6 +146,65 @@ export async function queueVoiceTraining(id: string): Promise<VoiceProject> {
   project.status = "queued";
   project.error = undefined;
   project.step = "夜間の学習待ち";
+  await saveProject(project);
+  return project;
+}
+
+export async function renameVoiceProject(id: string, name: string): Promise<VoiceProject> {
+  const trimmed = name.trim().slice(0, 40);
+  if (!trimmed) throw new Error("Voice name is required");
+  const project = await loadVoiceProject(id);
+  project.name = trimmed;
+  await saveProject(project);
+  return project;
+}
+
+const ICON_TYPES: Array<{ ext: string; test: (b: Buffer) => boolean }> = [
+  { ext: ".jpg", test: (b) => b[0] === 0xff && b[1] === 0xd8 },
+  { ext: ".png", test: (b) => b.subarray(0, 4).toString("hex") === "89504e47" },
+  { ext: ".webp", test: (b) => b.subarray(8, 12).toString("latin1") === "WEBP" },
+];
+const MAX_ICON_BYTES = 1024 * 1024;
+
+/** Stores the voice's picture (JPEG/PNG/WebP, ≤1 MB; the app sends a small square). */
+export async function setVoiceIcon(id: string, imageBase64: string): Promise<VoiceProject> {
+  const project = await loadVoiceProject(id);
+  const data = Buffer.from(imageBase64, "base64");
+  if (data.length === 0 || data.length > MAX_ICON_BYTES) throw new Error("Icon must be under 1 MB");
+  const type = ICON_TYPES.find((t) => t.test(data));
+  if (!type) throw new Error("Icon must be a JPEG, PNG or WebP image");
+  if (project.icon) await fs.rm(path.join(projectDir(id), project.icon), { force: true });
+  project.icon = `icon${type.ext}`;
+  await fs.writeFile(path.join(projectDir(id), project.icon), data);
+  await saveProject(project);
+  return project;
+}
+
+/** The voice's picture as base64, for lists in the app. */
+export async function readVoiceIcon(project: VoiceProject): Promise<string | undefined> {
+  if (!project.icon) return undefined;
+  try {
+    return (await fs.readFile(path.join(projectDir(project.id), project.icon))).toString("base64");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Turns a voice made from a text description into a studio voice. There is no real speaker,
+ * so no consent is involved; the sample becomes the recording that voice cloning imitates.
+ */
+export async function createDesignedVoice(
+  name: string,
+  caption: string,
+  sampleWav: string,
+): Promise<VoiceProject> {
+  const project = await createVoiceProject(name, true);
+  const target = path.join(projectDir(project.id), "raw", "design.wav");
+  await fs.copyFile(sampleWav, target);
+  project.files = [{ name: "design.wav", bytes: (await fs.stat(target)).size }];
+  project.source = "design";
+  project.caption = caption.slice(0, 200);
   await saveProject(project);
   return project;
 }

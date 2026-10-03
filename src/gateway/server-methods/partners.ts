@@ -3,6 +3,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { resolveOllamaBaseUrlForRun } from "../../../extensions/ollama/src/provider-base-url.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  enterGroupChatMode,
+  GROUP_CHAT_MODELS,
+  getGroupChatModelId,
+  leaveGroupChatMode,
+  setGroupChatModelId,
+  touchGroupChatMode,
+} from "../group-chat-model.js";
 import { parseJsonObject } from "../llm-json.js";
 import { parsePartnerSheet } from "../partner-sheet-schema.js";
 import {
@@ -20,7 +28,12 @@ import {
 } from "../partner-store.js";
 import { type PartnerVoice, sanitizePartnerVoice } from "../partner-tts.js";
 import { executeSpecialistTask } from "../specialist-router.js";
-import { cleanGeneratedText, echoesEarlierLine, isFailedReplyText } from "../text-hygiene.js";
+import {
+  cleanGeneratedText,
+  echoesEarlierLine,
+  isFailedReplyText,
+  stripOwnNamePrefix,
+} from "../text-hygiene.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export interface PartnerProfile {
@@ -196,6 +209,21 @@ async function getActiveModelAlias(): Promise<string> {
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
+/**
+ * Joins back-to-back messages of the same role. A group transcript puts several speakers in a
+ * row as "user" turns, and Gemma / Mistral chat templates reject anything but strict
+ * user/assistant alternation (HTTP 500).
+ */
+export function mergeConsecutiveRoles(messages: ChatMessage[]): ChatMessage[] {
+  const merged: ChatMessage[] = [];
+  for (const message of messages) {
+    const last = merged[merged.length - 1];
+    if (last && last.role === message.role) last.content = `${last.content}\n\n${message.content}`;
+    else merged.push({ ...message });
+  }
+  return merged;
+}
+
 function stripThinking(text: string): string {
   return text
     .replace(/<think>[\s\S]*?<\/think>/g, "")
@@ -215,9 +243,10 @@ export async function completeWithMainModel(params: {
   const baseUrl = getOllamaUrl();
   const model = await getActiveModelAlias();
   // Empty think block: Bonsai answers directly instead of spending the budget on reasoning.
+  const base = mergeConsecutiveRoles(params.messages);
   const messages: ChatMessage[] = params.think
-    ? params.messages
-    : [...params.messages, { role: "assistant", content: "<think>\n</think>\n" }];
+    ? base
+    : [...base, { role: "assistant", content: "<think>\n</think>\n" }];
   const res = await fetch(`${baseUrl}/v1/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -708,7 +737,7 @@ ${ATTRIBUTE_GUIDELINES_MANUAL}
           top_p: 0.9,
         },
       });
-      const reply = cleanGeneratedText(raw, 240);
+      const reply = cleanGeneratedText(stripOwnNamePrefix(raw.trim(), partner.name), 240);
       if (!reply) {
         lastError = "empty reply";
       } else if (echoesEarlierLine(reply, earlierLines)) {
@@ -932,6 +961,40 @@ export const partnersHandlers: GatewayRequestHandlers = {
     }
   },
 
+  // Group chat model: the app enters when the group chat opens and leaves when it closes.
+  "groupchat.models": async ({ respond }) => {
+    respond(
+      true,
+      {
+        current: await getGroupChatModelId(),
+        models: GROUP_CHAT_MODELS.map(({ id, label, description }) => ({ id, label, description })),
+      },
+      undefined,
+    );
+  },
+  "groupchat.model.set": async ({ params, respond }) => {
+    try {
+      const modelId = String((params as { modelId?: unknown })?.modelId ?? "");
+      respond(true, { current: await setGroupChatModelId(modelId) }, undefined);
+    } catch (e) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(e)));
+    }
+  },
+  "groupchat.enter": async ({ respond }) => {
+    try {
+      respond(true, await enterGroupChatMode(), undefined);
+    } catch (e) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
+    }
+  },
+  "groupchat.leave": async ({ respond }) => {
+    try {
+      respond(true, await leaveGroupChatMode(), undefined);
+    } catch (e) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
+    }
+  },
+
   "groupchat.turn": async ({ params, respond }) => {
     // SAFETY: params payload structure is manually validated below.
     const { partnerIds, history, preferredNextPartnerId, interruptionMessage, targetPartnerId } =
@@ -1035,6 +1098,7 @@ export const partnersHandlers: GatewayRequestHandlers = {
         promptExtra = `【指示】直前の「${lastTurn.sender}」の発言に対して、相槌を打ったり、ツッコミを入れたり、自分の意見を言ってリアクションしてください。そして${otherNamesStr}またはユーザーに話を振ってください。`;
       }
 
+      touchGroupChatMode();
       const reply = await generatePartnerReply(nextSpeaker, activeHistory, promptExtra);
       if (isFailedReplyText(reply)) {
         // Surface the reason instead of saving a placeholder that later turns would build on.
@@ -1147,6 +1211,8 @@ export const partnersHandlers: GatewayRequestHandlers = {
     }
 
     try {
+      // A 1:1 chat needs the main model back if the group chat model is still loaded.
+      await leaveGroupChatMode().catch(() => undefined);
       const allPartners = await loadPartners();
       const partner = allPartners.find((p) => p.id === partnerId);
       if (!partner) {

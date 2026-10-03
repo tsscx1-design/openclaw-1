@@ -586,6 +586,10 @@ internal fun PartnerManagementScreen(
                       .padding(horizontal = 10.dp, vertical = 4.dp),
                   verticalAlignment = Alignment.CenterVertically,
                 ) {
+                  if (engine == "clone") {
+                    VoiceIcon(sp.optString("iconBase64"), 36.dp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                  }
                   Column(modifier = Modifier.weight(1f)) {
                     Text(label, style = ClawTheme.type.body.copy(fontSize = 14.sp), color = ClawTheme.colors.text)
                     Text(

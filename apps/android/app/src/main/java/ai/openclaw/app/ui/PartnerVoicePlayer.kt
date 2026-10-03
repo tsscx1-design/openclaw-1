@@ -50,7 +50,26 @@ internal object PartnerVoicePlayer {
       }
     // Stopped (or replaced by another message) while the PC was still synthesizing.
     if (_playingKey.value != key) return true
-    val audio = Base64.decode(response.optString("audioBase64"), Base64.DEFAULT)
+    play(context, response.optString("audioBase64"))
+    return true
+  }
+
+  /**
+   * Plays audio the caller already fetched (voice-studio previews and design drafts). Call
+   * [markPending] before a slow request so the UI can show "stop" while the PC works.
+   */
+  fun playBase64(context: Context, audioBase64: String, key: String) {
+    if (_playingKey.value != key) return
+    play(context, audioBase64)
+  }
+
+  fun markPending(key: String) {
+    stop()
+    _playingKey.value = key
+  }
+
+  private fun play(context: Context, audioBase64: String) {
+    val audio = Base64.decode(audioBase64, Base64.DEFAULT)
     val file = File(context.cacheDir, "partner-voice.wav")
     file.writeBytes(audio)
     player =
@@ -66,7 +85,6 @@ internal object PartnerVoicePlayer {
         prepare()
         start()
       }
-    return true
   }
 
   fun stop() {
