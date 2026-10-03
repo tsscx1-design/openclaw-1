@@ -2,7 +2,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import {
   deleteMediaJob,
   getMediaJob,
-  listMediaJobs,
+  listMediaLibrary,
   mediaStudioStatus,
   readMediaResult,
   startMediaJob,
@@ -125,9 +125,12 @@ export const mediaStudioHandlers: GatewayRequestHandlers = {
     respond(true, result, undefined);
   }),
 
+  // The library: every saved result, optionally one kind only, plus per-kind counts for the tabs.
   "media.job.list": guarded(async (params, respond) => {
-    const limit = typeof params.limit === "number" ? Math.min(60, Math.max(1, params.limit)) : 30;
-    respond(true, { jobs: (await listMediaJobs(limit)).map(summary) }, undefined);
+    const limit = typeof params.limit === "number" ? Math.min(300, Math.max(1, params.limit)) : 30;
+    const kind = KINDS.find((value) => value === str(params, "kind"));
+    const { jobs, counts } = await listMediaLibrary(kind, limit);
+    respond(true, { jobs: jobs.map(summary), counts }, undefined);
   }),
 
   "media.job.delete": guarded(async (params, respond) => {

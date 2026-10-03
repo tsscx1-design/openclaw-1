@@ -193,7 +193,8 @@ const MUSIC_DIT = "acestep-v15-turbo-Q8_0.gguf";
 
 const JOB_TIMEOUT_MS = 40 * 60_000;
 const MAX_QUEUE = 4;
-const KEEP_RESULTS = 60;
+/** Finished results are kept until the user deletes them; only failed attempts are trimmed. */
+const KEEP_FAILED = 30;
 const MAX_TEXT = 500;
 
 const VIDEO_NEGATIVE =
@@ -224,6 +225,13 @@ function aceBin(name: "ace-lm" | "ace-synth"): string {
 }
 function outDir(): string {
   return path.join(home(), "media", "out");
+}
+
+/** Finished files live in one folder per kind (out/image, out/video, out/music). */
+async function resultPath(job: MediaJob, ext: string): Promise<string> {
+  const dir = path.join(outDir(), job.kind);
+  await fs.mkdir(dir, { recursive: true });
+  return path.join(dir, `${job.id}${ext}`);
 }
 function pauseFlag(): string {
   return path.join(home(), "bonsai", "llm-pause.flag");
@@ -875,7 +883,7 @@ async function runImageJob(job: MediaJob): Promise<void> {
   assertAllowedRequest(job.request, tags);
   markStage(job, "GPU を空けています");
   await acquireGpu();
-  const file = path.join(outDir(), `${job.id}.png`);
+  const file = await resultPath(job, ".png");
   await renderImage(job, tags, isSexualRequest(`${job.request} ${tags}`), file);
   job.file = file;
   job.mime = "image/png";
@@ -929,7 +937,7 @@ async function runVideoJob(job: MediaJob): Promise<void> {
   }
   markStage(job, "GPU を空けています");
   await acquireGpu();
-  const file = path.join(outDir(), `${job.id}.webm`);
+  const file = await resultPath(job, ".webm");
   await runTool(
     sdCli(),
     sdcppVideoArgs(engine, {
@@ -1036,7 +1044,7 @@ async function smoothVideo(job: MediaJob): Promise<void> {
     cwd: path.dirname(RIFE_SCRIPT),
     timeoutMs: 10 * 60_000,
   });
-  const file = path.join(outDir(), `${job.id}.mp4`);
+  const file = await resultPath(job, ".mp4");
   await fs.rename(smoothed, file);
   await fs.rm(job.file, { force: true });
   job.file = file;
@@ -1163,7 +1171,7 @@ async function runWan2gpVideo(
   const video = produced.find((file) => /\.(mp4|webm|mkv)$/i.test(file));
   if (!video) throw new Error("Wan2GP が動画を出力しませんでした");
   const ext = path.extname(video).toLowerCase();
-  const file = path.join(outDir(), `${job.id}${ext}`);
+  const file = await resultPath(job, ext);
   await fs.rename(video, file);
   await fs.rm(workDir, { recursive: true, force: true });
   job.file = file;
@@ -1205,7 +1213,7 @@ async function runMusicJob(job: MediaJob): Promise<void> {
     ["--models", MUSIC_MODEL_DIR, "--request", path.join(workDir, "request0.json")],
     {},
   );
-  const file = path.join(outDir(), `${job.id}.mp3`);
+  const file = await resultPath(job, ".mp3");
   await fs.rename(path.join(workDir, "request00.mp3"), file);
   // Keep the generated lyrics with the result so the app can show them.
   try {
@@ -1257,10 +1265,8 @@ async function loadJobMeta(id: string): Promise<MediaJob | undefined> {
 }
 
 async function pruneResults(): Promise<void> {
-  const metas = (await listMediaJobs(1_000)).filter(
-    (job) => job.status === "done" || job.status === "error",
-  );
-  for (const job of metas.slice(KEEP_RESULTS)) {
+  const failed = (await listMediaJobs(10_000)).filter((job) => job.status === "error");
+  for (const job of failed.slice(KEEP_FAILED)) {
     await fs.rm(metaPath(job.id), { force: true });
     if (job.file) await fs.rm(job.file, { force: true });
   }
@@ -1366,6 +1372,20 @@ export async function startMediaJob(
 
 export async function getMediaJob(id: string): Promise<MediaJob | undefined> {
   return jobs.get(id) ?? (await loadJobMeta(id));
+}
+
+/** The saved results of one kind (or all), newest first, with how many each kind has. */
+export async function listMediaLibrary(
+  kind: MediaKind | undefined,
+  limit: number,
+): Promise<{ jobs: MediaJob[]; counts: Record<MediaKind, number> }> {
+  const all = await listMediaJobs(10_000);
+  const counts: Record<MediaKind, number> = { image: 0, video: 0, music: 0 };
+  for (const job of all) if (job.status === "done") counts[job.kind] += 1;
+  return {
+    jobs: (kind ? all.filter((job) => job.kind === kind) : all).slice(0, limit),
+    counts,
+  };
 }
 
 export async function listMediaJobs(limit = 30): Promise<MediaJob[]> {

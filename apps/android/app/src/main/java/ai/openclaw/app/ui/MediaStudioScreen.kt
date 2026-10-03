@@ -91,6 +91,8 @@ private data class MediaItem(
 private const val MEDIA_POLL_MS = 4_000L
 private const val MEDIA_PREVIEW_MAX_PX = 900
 private const val MEDIA_UPLOAD_MAX_PX = 1344
+/** Results listed per library tab (the PC keeps them all until deleted). */
+private const val MEDIA_LIBRARY_PAGE = 120
 /** SDXL checkpoints that take the DMD2 "fast" mode (NoobAI is V-Pred, Z-Image runs elsewhere). */
 private val FAST_IMAGE_MODELS = setOf("wai", "lustify", "cyberreal", "asianreal")
 /** Video engines that make a fixed 2 s clip in sd.cpp (no length choice). */
@@ -207,6 +209,9 @@ internal fun MediaStudioScreen(viewModel: MainViewModel, onBack: () -> Unit) {
   var sourceImageJobId by remember { mutableStateOf<String?>(null) }
   var sourceImageBase64 by remember { mutableStateOf<String?>(null) }
   var items by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+  // Library tab: "" = everything, or one kind; counts come from the PC for each tab label.
+  var libraryKind by remember { mutableStateOf("") }
+  var libraryCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
   var statusMessage by remember { mutableStateOf("") }
   var isSending by remember { mutableStateOf(false) }
   var deleteTarget by remember { mutableStateOf<MediaItem?>(null) }
@@ -222,8 +227,11 @@ internal fun MediaStudioScreen(viewModel: MainViewModel, onBack: () -> Unit) {
 
   suspend fun loadList() {
     try {
-      val res = JSONObject(viewModel.runGatewayRpc(GatewayMethod.MediaJobList, JSONObject().put("limit", 40).toString()))
+      val params = JSONObject().put("limit", MEDIA_LIBRARY_PAGE)
+      if (libraryKind.isNotEmpty()) params.put("kind", libraryKind)
+      val res = JSONObject(viewModel.runGatewayRpc(GatewayMethod.MediaJobList, params.toString()))
       items = parseMediaItems(res.optJSONArray("jobs"))
+      res.optJSONObject("counts")?.let { c -> libraryCounts = listOf("image", "video", "music").associateWith { c.optInt(it) } }
     } catch (e: CancellationException) {
       throw e
     } catch (e: Exception) {
@@ -350,7 +358,7 @@ internal fun MediaStudioScreen(viewModel: MainViewModel, onBack: () -> Unit) {
       }
     }
 
-  LaunchedEffect(Unit) { loadList() }
+  LaunchedEffect(libraryKind) { loadList() }
   val hasActive = items.any { it.status == "queued" || it.status == "running" }
   LaunchedEffect(hasActive) {
     while (hasActive) {
@@ -557,6 +565,23 @@ internal fun MediaStudioScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             if (statusMessage.isNotBlank()) {
               Text(text = statusMessage, style = ClawTheme.type.caption.copy(fontSize = 13.sp), color = ClawTheme.colors.textMuted)
             }
+          }
+        }
+      }
+
+      item {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+          Text(
+            text = "📁 作品の保存庫（消すまでPCに残ります）",
+            style = ClawTheme.type.body.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
+            color = ClawTheme.colors.text,
+          )
+          Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+            val total = libraryCounts.values.sum()
+            listOf("" to "すべて $total", "image" to "画像 ${libraryCounts["image"] ?: 0}", "video" to "動画 ${libraryCounts["video"] ?: 0}", "music" to "音楽 ${libraryCounts["music"] ?: 0}")
+              .forEach { (id, label) ->
+                ChoiceChip(label = label, selected = libraryKind == id, onClick = { libraryKind = id }, modifier = Modifier.weight(1f))
+              }
           }
         }
       }
