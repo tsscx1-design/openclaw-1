@@ -4,6 +4,7 @@ import {
   isSexualRequest,
   sanitizeLyrics,
   sanitizeMediaText,
+  wan2gpFrames,
 } from "./media-studio.js";
 
 describe("assertAllowedRequest", () => {
@@ -44,5 +45,14 @@ describe("sanitizeLyrics", () => {
     expect(sanitizeLyrics("[Verse]\r\n風に乗って、笑顔！\n[Chorus]\n歌おう")).toBe(
       "[Verse]\n風に乗って、笑顔！\n[Chorus]\n歌おう",
     );
+  });
+});
+
+describe("wan2gpFrames", () => {
+  it("returns 1 + a multiple of the frame step, clamped to the engine's range", () => {
+    expect(wan2gpFrames(5, 16, 4, 30)).toBe(81);
+    expect(wan2gpFrames(10, 24, 8, 10)).toBe(241);
+    expect(wan2gpFrames(60, 24, 8, 10)).toBe(241);
+    expect(wan2gpFrames(0, 24, 4, 5)).toBe(49);
   });
 });

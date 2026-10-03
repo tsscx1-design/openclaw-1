@@ -48,11 +48,19 @@ export type MediaOptions = {
   sourceImageJobId?: string;
   /** video: base64 image supplied by the app */
   sourceImageBase64?: string;
-  /** music */
+  /**
+   * video engine: "standard" = sd.cpp + Wan 2.2 14B Rapid NSFW (2 s); the others run in Wan2GP:
+   * "long" = Wan 2.2 SVI 2 Pro Lightning (sliding windows), "audio" = LTX-2 distilled with sound,
+   * "fast" = FastWan 2.2 5B (3 steps).
+   */
+  engine?: VideoEngine;
+  /** music, and video length for the Wan2GP engines */
   lyrics?: string;
   instrumental?: boolean;
   durationSec?: number;
 };
+
+export type VideoEngine = "standard" | "long" | "audio" | "fast";
 
 const MEDIA_MODEL_DIR = "D:\\media-models";
 const IMAGE_MODEL = path.join(MEDIA_MODEL_DIR, "image", "waiIllustriousSDXL_v170.safetensors");
@@ -122,6 +130,7 @@ async function exists(file: string): Promise<boolean> {
 export async function mediaStudioStatus(): Promise<{
   image: { ready: boolean; missing: string[] };
   video: { ready: boolean; missing: string[] };
+  wan2gp: { ready: boolean; missing: string[] };
   music: { ready: boolean; missing: string[] };
   busy: boolean;
   queued: number;
@@ -134,6 +143,8 @@ export async function mediaStudioStatus(): Promise<{
   return {
     image: await check([sdCli(), IMAGE_MODEL]),
     video: await check([sdCli(), IMAGE_MODEL, VIDEO_MODEL, VIDEO_VAE, VIDEO_T5, VIDEO_CLIP_VISION]),
+    // Wan2GP engines download their models on first use, so only the runner is checked here.
+    wan2gp: await check([WAN2GP_PYTHON, WAN2GP_RUNNER]),
     music: await check([
       aceBin("ace-lm"),
       aceBin("ace-synth"),
@@ -233,6 +244,16 @@ async function toMotionPrompt(request: string): Promise<string> {
   return sanitizeMediaText(ASCII_ONLY(text), 500);
 }
 
+/** LTX-2 renders sound too, so its prompt also describes what is heard. */
+async function toAudioVideoPrompt(request: string): Promise<string> {
+  const text = await askGemma(
+    "You write prompts for a video model that also generates the soundtrack. In two or three short English sentences describe the motion, the camera, and what is heard (voices, ambient sound, music, effects). Keep any spoken line in the user's language inside quotes. Output only the description.",
+    request || "subtle natural motion, gentle camera movement, soft ambient sound",
+    200,
+  );
+  return sanitizeMediaText(text.replace(/[\r\n]+/g, " "), 700);
+}
+
 async function toMusicCaption(request: string): Promise<string> {
   const text = await askGemma(
     "You write captions for a text-to-music model. Rewrite the user's request as one English sentence listing genre, mood, tempo feel, instruments and vocal type (for example: 'Upbeat J-pop with bright synths, punchy drums and a cheerful female vocal'). Output only the caption.",
@@ -329,7 +350,7 @@ function markStage(job: MediaJob, stage: string): void {
 function runTool(
   exe: string,
   args: string[],
-  opts: { cwd?: string; onLine?: (line: string) => void },
+  opts: { cwd?: string; onLine?: (line: string) => void; timeoutMs?: number },
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(exe, args, {
@@ -356,7 +377,7 @@ function runTool(
     const timer = setTimeout(() => {
       child.kill();
       reject(new Error(`${path.basename(exe)} timed out`));
-    }, JOB_TIMEOUT_MS);
+    }, opts.timeoutMs ?? JOB_TIMEOUT_MS);
     child.on("error", (err) => {
       clearTimeout(timer);
       reject(err);
@@ -462,8 +483,14 @@ async function runVideoJob(job: MediaJob): Promise<void> {
     initImage = path.join(outDir(), `${job.id}-first.png`);
     await renderImage(job, tags, sexual, initImage);
   }
-  const motion = await toMotionPrompt(job.request);
+  const engine = job.options.engine ?? "standard";
+  const motion =
+    engine === "audio" ? await toAudioVideoPrompt(job.request) : await toMotionPrompt(job.request);
   assertAllowedRequest(job.request, motion);
+  if (engine !== "standard") {
+    await runWan2gpVideo(job, engine, initImage, motion, sexual, aspect);
+    return;
+  }
   markStage(job, "GPU を空けています");
   await acquireGpu();
   const file = path.join(outDir(), `${job.id}.webm`);
@@ -514,6 +541,105 @@ async function runVideoJob(job: MediaJob): Promise<void> {
   );
   job.file = file;
   job.mime = "video/webm";
+}
+
+// Wan2GP engines run headless through its Python API (openclaw_job.py); nothing is served on the network.
+const WAN2GP_DIR = "D:\\media-tools\\Wan2GP";
+const WAN2GP_PYTHON = path.join(WAN2GP_DIR, "venv", "Scripts", "python.exe");
+const WAN2GP_RUNNER = path.join(WAN2GP_DIR, "openclaw_job.py");
+const WAN2GP_SIZES: Record<NonNullable<MediaOptions["aspect"]>, string> = {
+  square: "624x624",
+  portrait: "480x832",
+  landscape: "832x480",
+};
+const WAN2GP_ENGINES: Record<
+  Exclude<VideoEngine, "standard">,
+  { modelType: string; fps: number; frameStep: number; maxSec: number; label: string }
+> = {
+  long: {
+    modelType: "i2v_2_2_Enhanced_Lightning_v2_svi2pro",
+    fps: 16,
+    frameStep: 4,
+    maxSec: 30,
+    label: "長い動画",
+  },
+  audio: {
+    modelType: "ltx2_distilled_gguf_q4_k_m",
+    fps: 24,
+    frameStep: 8,
+    maxSec: 10,
+    label: "音付き動画",
+  },
+  fast: { modelType: "ti2v_2_2_fastwan", fps: 24, frameStep: 4, maxSec: 5, label: "高速動画" },
+};
+
+/** Frame count the model accepts: 1 + a multiple of its frame step. */
+export function wan2gpFrames(
+  seconds: number,
+  fps: number,
+  frameStep: number,
+  maxSec: number,
+): number {
+  const clamped = Math.min(maxSec, Math.max(2, seconds));
+  return Math.ceil((clamped * fps) / frameStep) * frameStep + 1;
+}
+
+async function runWan2gpVideo(
+  job: MediaJob,
+  engine: Exclude<VideoEngine, "standard">,
+  initImage: string,
+  prompt: string,
+  sexual: boolean,
+  aspect: NonNullable<MediaOptions["aspect"]>,
+): Promise<void> {
+  const spec = WAN2GP_ENGINES[engine];
+  const workDir = path.join(outDir(), `${job.id}-w2g`);
+  await fs.mkdir(workDir, { recursive: true });
+  const request = path.join(workDir, "request.json");
+  await fs.writeFile(
+    request,
+    JSON.stringify({
+      output_dir: workDir,
+      settings: {
+        model_type: spec.modelType,
+        prompt,
+        negative_prompt: sexual ? `${VIDEO_NEGATIVE}, ${ADULT_ONLY_NEGATIVE}` : VIDEO_NEGATIVE,
+        image_prompt_type: "S",
+        image_start: initImage,
+        resolution: WAN2GP_SIZES[aspect],
+        video_length: wan2gpFrames(
+          job.options.durationSec ?? 5,
+          spec.fps,
+          spec.frameStep,
+          spec.maxSec,
+        ),
+        seed: -1,
+      },
+    }),
+  );
+  markStage(job, "GPU を空けています");
+  await acquireGpu();
+  markStage(job, `${spec.label}を作っています（初回はモデルのダウンロードに時間がかかります）`);
+  let produced: string[] = [];
+  await runTool(WAN2GP_PYTHON, [WAN2GP_RUNNER, request], {
+    cwd: WAN2GP_DIR,
+    // The first run of an engine downloads tens of GB of weights.
+    timeoutMs: 3 * 60 * 60_000,
+    onLine: (line) => {
+      const progress = /^PROGRESS (\d+) (.*)$/.exec(line);
+      if (progress) job.stage = `${spec.label}を作っています ${progress[1]}%`;
+      const result = /^RESULT (.*)$/.exec(line)?.[1];
+      if (result) produced = JSON.parse(result) as string[];
+    },
+  });
+  const video = produced.find((file) => /\.(mp4|webm|mkv)$/i.test(file));
+  if (!video) throw new Error("Wan2GP が動画を出力しませんでした");
+  const ext = path.extname(video).toLowerCase();
+  const file = path.join(outDir(), `${job.id}${ext}`);
+  await fs.rename(video, file);
+  await fs.rm(workDir, { recursive: true, force: true });
+  job.file = file;
+  job.mime = ext === ".webm" ? "video/webm" : ext === ".mkv" ? "video/x-matroska" : "video/mp4";
 }
 
 async function runMusicJob(job: MediaJob): Promise<void> {
@@ -654,10 +780,10 @@ export async function startMediaJob(
   options: MediaOptions,
 ): Promise<MediaJob> {
   const status = await mediaStudioStatus();
-  if (!status[kind].ready) {
-    throw new Error(
-      `${kind} generation is not installed (missing: ${status[kind].missing.join(", ")})`,
-    );
+  const usesWan2gp = kind === "video" && (options.engine ?? "standard") !== "standard";
+  const needed = usesWan2gp ? status.wan2gp : status[kind];
+  if (!needed.ready) {
+    throw new Error(`${kind} generation is not installed (missing: ${needed.missing.join(", ")})`);
   }
   const clean = sanitizeMediaText(request);
   if (!clean && kind !== "video") throw new Error("内容を入力してください");

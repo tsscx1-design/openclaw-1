@@ -122,6 +122,8 @@ private fun extensionFor(mime: String) =
   when (mime) {
     "image/png" -> "png"
     "video/webm" -> "webm"
+    "video/mp4" -> "mp4"
+    "video/x-matroska" -> "mkv"
     "audio/mpeg" -> "mp3"
     else -> "bin"
   }
@@ -193,6 +195,8 @@ internal fun MediaStudioScreen(viewModel: MainViewModel, onBack: () -> Unit) {
   var lyrics by remember { mutableStateOf("") }
   var instrumental by remember { mutableStateOf(false) }
   var musicSeconds by remember { mutableStateOf(90) }
+  var videoEngine by remember { mutableStateOf("standard") }
+  var videoSeconds by remember { mutableStateOf(5) }
   var sourceImageJobId by remember { mutableStateOf<String?>(null) }
   var sourceImageBase64 by remember { mutableStateOf<String?>(null) }
   var items by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
@@ -249,6 +253,8 @@ internal fun MediaStudioScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         val params = JSONObject().put("kind", kind).put("prompt", prompt.trim())
         if (kind != "music") params.put("aspect", aspect)
         if (kind == "video") {
+          params.put("engine", videoEngine)
+          if (videoEngine != "standard") params.put("durationSec", videoSeconds)
           sourceImageJobId?.let { params.put("sourceImageJobId", it) }
           sourceImageBase64?.let { params.put("sourceImageBase64", it) }
         }
@@ -403,6 +409,41 @@ internal fun MediaStudioScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             }
 
             if (kind == "video") {
+              Text(text = "作り方", style = ClawTheme.type.caption.copy(fontSize = 13.sp), color = ClawTheme.colors.text)
+              val engines =
+                listOf(
+                  Triple("standard", "標準", "制限解除版。2秒・約5分"),
+                  Triple("long", "長い動画", "Wan2.2 SVI。5〜30秒、崩れにくい"),
+                  Triple("audio", "音付き", "LTX-2。映像と音を同時に、〜10秒"),
+                  Triple("fast", "高速", "FastWan 5B。〜5秒を速く"),
+                )
+              engines.chunked(2).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                  row.forEach { (id, label, _) ->
+                    ChoiceChip(label = label, selected = videoEngine == id, onClick = { videoEngine = id }, modifier = Modifier.weight(1f))
+                  }
+                }
+              }
+              Text(
+                text = engines.first { it.first == videoEngine }.third +
+                  if (videoEngine != "standard") "（初回はモデルのダウンロードで時間がかかります）" else "",
+                style = ClawTheme.type.caption,
+                color = ClawTheme.colors.textMuted,
+              )
+              if (videoEngine != "standard") {
+                val choices =
+                  when (videoEngine) {
+                    "long" -> listOf(5, 10, 20, 30)
+                    "audio" -> listOf(4, 6, 8, 10)
+                    else -> listOf(3, 5)
+                  }
+                if (videoSeconds !in choices) videoSeconds = choices.first()
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                  choices.forEach { sec ->
+                    ChoiceChip(label = "${sec}秒", selected = videoSeconds == sec, onClick = { videoSeconds = sec }, modifier = Modifier.weight(1f))
+                  }
+                }
+              }
               val source =
                 when {
                   sourceImageJobId != null -> "作った画像を動かします"

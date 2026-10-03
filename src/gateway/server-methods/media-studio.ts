@@ -16,6 +16,7 @@ type Params = Record<string, unknown>;
 
 const KINDS: readonly MediaKind[] = ["image", "video", "music"];
 const ASPECTS = ["square", "portrait", "landscape"] as const;
+const VIDEO_ENGINES = ["standard", "long", "audio", "fast"] as const;
 // The result travels inside one WebSocket frame (25 MB); keep uploads well below it.
 const MAX_SOURCE_IMAGE_BASE64 = 8 * 1024 * 1024;
 
@@ -87,6 +88,7 @@ export const mediaStudioHandlers: GatewayRequestHandlers = {
     const duration = typeof params.durationSec === "number" ? params.durationSec : undefined;
     const options: MediaOptions = {
       aspect: ASPECTS.find((value) => value === aspect),
+      engine: VIDEO_ENGINES.find((value) => value === str(params, "engine")),
       sourceImageJobId: str(params, "sourceImageJobId"),
       sourceImageBase64,
       lyrics: str(params, "lyrics"),
