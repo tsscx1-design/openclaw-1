@@ -81,7 +81,9 @@ function Start-WorkerInstance([string]$Key) {
         Write-Warning "[$Key] Model file not found: $modelPath"
         return
     }
-    $cmdLine = "`"" + $ServerExe + "`" -m `"" + $modelPath + "`" --port " + $cfg.Port + " --host 127.0.0.1 -ngl 0 -t 4 --poll 0 --parallel " + $cfg.Parallel + " -c " + $cfg.CtxSize + " -a `"" + $cfg.Alias + "`""
+    # --device none keeps workers off the GPU entirely: with only -ngl 0 each one still opened a CUDA
+    # context and compute buffers (~0.35 GB of the 8 GB card), which the main model and media jobs need.
+    $cmdLine = "`"" + $ServerExe + "`" -m `"" + $modelPath + "`" --port " + $cfg.Port + " --host 127.0.0.1 -ngl 0 --device none -t 4 --poll 0 --parallel " + $cfg.Parallel + " -c " + $cfg.CtxSize + " -a `"" + $cfg.Alias + "`""
     # The gemma worker doubles as the photo-album vision model when its mmproj file is present.
     if ($cfg.MmprojFile -and (Test-Path $cfg.MmprojFile)) {
         $cmdLine += " --mmproj `"" + $cfg.MmprojFile + "`" --no-mmproj-offload"
