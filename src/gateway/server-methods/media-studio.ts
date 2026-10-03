@@ -16,8 +16,8 @@ type Params = Record<string, unknown>;
 
 const KINDS: readonly MediaKind[] = ["image", "video", "music"];
 const ASPECTS = ["square", "portrait", "landscape"] as const;
-const VIDEO_ENGINES = ["standard", "long", "audio", "fast"] as const;
-const IMAGE_MODELS = ["wai", "noobai", "zimage"] as const;
+const VIDEO_ENGINES = ["standard", "remix", "long", "audio", "fast", "h3"] as const;
+const IMAGE_MODELS = ["wai", "noobai", "zimage", "lustify", "cyberreal", "asianreal"] as const;
 // The result travels inside one WebSocket frame (25 MB); keep uploads well below it.
 const MAX_SOURCE_IMAGE_BASE64 = 8 * 1024 * 1024;
 
@@ -91,6 +91,8 @@ export const mediaStudioHandlers: GatewayRequestHandlers = {
       aspect: ASPECTS.find((value) => value === aspect),
       engine: VIDEO_ENGINES.find((value) => value === str(params, "engine")),
       imageModel: IMAGE_MODELS.find((value) => value === str(params, "imageModel")),
+      fast: params.fast === true,
+      smooth: params.smooth === true,
       sourceImageJobId: str(params, "sourceImageJobId"),
       sourceImageBase64,
       lyrics: str(params, "lyrics"),

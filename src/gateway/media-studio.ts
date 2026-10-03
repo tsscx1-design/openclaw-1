@@ -54,28 +54,59 @@ export type MediaOptions = {
    * "fast" = FastWan 2.2 5B (3 steps).
    */
   engine?: VideoEngine;
+  /** video: interpolate to twice the frame rate (RIFE) so motion looks smoother; same length */
+  smooth?: boolean;
   /** image model for images and for the first frame of text-to-video */
   imageModel?: ImageModel;
+  /** SDXL (not V-Pred): sample in 8 steps with the DMD2 LoRA, about 3x faster, slightly different look */
+  fast?: boolean;
   /** music, and video length for the Wan2GP engines */
   lyrics?: string;
   instrumental?: boolean;
   durationSec?: number;
 };
 
-export type VideoEngine = "standard" | "long" | "audio" | "fast";
-export type ImageModel = "wai" | "noobai" | "zimage";
+/** "standard" and "remix" run in sd.cpp; the others in Wan2GP. */
+export type VideoEngine = "standard" | "remix" | "long" | "audio" | "fast" | "h3";
+type SdcppVideoEngine = "standard" | "remix";
+export type ImageModel = "wai" | "noobai" | "zimage" | "lustify" | "cyberreal" | "asianreal";
+type SdxlModel = Exclude<ImageModel, "zimage">;
+type SdxlSampler = "euler_a" | "dpmpp_2m_sde_karras" | "lcm";
 
 const MEDIA_MODEL_DIR = "D:\\media-models";
 const IMAGE_MODEL = path.join(MEDIA_MODEL_DIR, "image", "waiIllustriousSDXL_v170.safetensors");
+/** DMD2 4-step LoRA (tianweiy/DMD2); with LCM it works on SDXL epsilon checkpoints, not V-Pred. */
+const DMD2_LORA = path.join(
+  MEDIA_MODEL_DIR,
+  "image",
+  "lora",
+  "dmd2_sdxl_4step_lora_fp16.safetensors",
+);
+const DMD2_SETTINGS = { sampler: "lcm" as SdxlSampler, steps: 8, cfg: 1.5 };
+
+const PHOTO_NEGATIVE =
+  "cartoon, illustration, anime, painting, CGI, 3D render, low quality, worst quality, blurry, bad anatomy, bad hands, extra fingers, deformed, watermark, logo, text";
 
 /** SDXL checkpoints served by the resident worker; Z-Image runs in Wan2GP instead. */
 const SDXL_MODELS: Record<
-  Exclude<ImageModel, "zimage">,
-  { file: string; vpred: boolean; steps: number; cfg: number; quality: string; negative: string }
+  SdxlModel,
+  {
+    file: string;
+    vpred: boolean;
+    /** Photo-real checkpoints get descriptive phrases instead of danbooru tags. */
+    photo: boolean;
+    sampler: SdxlSampler;
+    steps: number;
+    cfg: number;
+    quality: string;
+    negative: string;
+  }
 > = {
   wai: {
     file: IMAGE_MODEL,
     vpred: false,
+    photo: false,
+    sampler: "euler_a",
     steps: 28,
     cfg: 6,
     quality: "masterpiece, best quality, amazing quality, very aesthetic, absurdres",
@@ -86,18 +117,75 @@ const SDXL_MODELS: Record<
   noobai: {
     file: path.join(MEDIA_MODEL_DIR, "image", "NoobAI-XL-Vpred-v1.0.safetensors"),
     vpred: true,
+    photo: false,
+    sampler: "euler_a",
     steps: 30,
     cfg: 4.5,
     quality: "masterpiece, best quality, newest, absurdres, highres",
     negative:
       "worst quality, old, early, low quality, lowres, signature, username, logo, bad hands, mutated hands, bad anatomy, watermark",
   },
+  // LUSTIFY V9 Zenith (photo-real, uncensored): DPM++ 2M SDE Karras, ~30 steps, CFG 4-7.
+  lustify: {
+    file: path.join(MEDIA_MODEL_DIR, "image", "lustifyNSFWCheckpoint_zenithV9.safetensors"),
+    vpred: false,
+    photo: true,
+    sampler: "dpmpp_2m_sde_karras",
+    steps: 30,
+    cfg: 4.5,
+    quality: "photograph, realistic, high detail, sharp focus",
+    negative: PHOTO_NEGATIVE,
+  },
+  // CyberRealistic XL Play v10: DPM++ 2M SDE Karras, 30+ steps, CFG 3-5.
+  cyberreal: {
+    file: path.join(MEDIA_MODEL_DIR, "image", "CyberRealisticXLPlay_V10.0_FP16.safetensors"),
+    vpred: false,
+    photo: true,
+    sampler: "dpmpp_2m_sde_karras",
+    steps: 30,
+    cfg: 4,
+    quality: "photograph, realistic, high detail, sharp focus",
+    negative: PHOTO_NEGATIVE,
+  },
+  // Asian Realism by Stable Yogi (Illustrious) v2.0: East Asian faces; DPM++ 2M Karras, 20-30 steps, CFG 5-7.
+  asianreal: {
+    file: path.join(MEDIA_MODEL_DIR, "image", "asianRealismByStable_v20FP16.safetensors"),
+    vpred: false,
+    photo: true,
+    sampler: "dpmpp_2m_sde_karras",
+    steps: 28,
+    cfg: 5,
+    quality: "photograph, realistic, high detail, sharp focus",
+    negative: PHOTO_NEGATIVE,
+  },
 };
+
+/** The SDXL model a job uses; anything else (unset, Z-Image's sd.cpp fallback) means WAI. */
+function sdxlModelOf(job: MediaJob): SdxlModel {
+  const model = job.options.imageModel;
+  return model && model !== "zimage" ? model : "wai";
+}
+
+/** Sampling settings for an SDXL job; "fast" swaps in DMD2 where the checkpoint allows it. */
+export function sdxlSampling(
+  model: SdxlModel,
+  fast: boolean,
+): { sampler: SdxlSampler; steps: number; cfg: number; lora?: string } {
+  const spec = SDXL_MODELS[model];
+  // CFG stays above 1 so the negative prompt (including the adult-only one) still applies.
+  if (fast && !spec.vpred) return { ...DMD2_SETTINGS, lora: DMD2_LORA };
+  return { sampler: spec.sampler, steps: spec.steps, cfg: spec.cfg };
+}
 const VIDEO_DIR = path.join(MEDIA_MODEL_DIR, "video");
 const VIDEO_MODEL = path.join(VIDEO_DIR, "wan2.2-i2v-rapid-aio-v10-nsfw-Q3_K_S.gguf");
 const VIDEO_VAE = path.join(VIDEO_DIR, "wan_2.1_vae.safetensors");
 const VIDEO_T5 = path.join(VIDEO_DIR, "umt5-xxl-encoder-Q8_0.gguf");
 const VIDEO_CLIP_VISION = path.join(VIDEO_DIR, "clip_vision_h.safetensors");
+// Wan 2.2 Remix v3 I2V (photo-real, uncensored): MoE pair, 4-8 steps at CFG 1, shift 5-10.
+const REMIX_HIGH = path.join(VIDEO_DIR, "remix", "wan22RemixT2VI2V_i2vHighV30-Q3_K_M.gguf");
+const REMIX_LOW = path.join(VIDEO_DIR, "remix", "wan22RemixT2VI2V_i2vLowV30-Q3_K_M.gguf");
+/** RIFE v4.26 frame interpolation (Wan2GP's weights) for the sd.cpp engines. */
+const RIFE_SCRIPT = "D:\\media-tools\\image\\rife_video.py";
 const MUSIC_MODEL_DIR = path.join(MEDIA_MODEL_DIR, "music");
 // acestep.cpp looks models up by full file name, .gguf included.
 const MUSIC_LM = "acestep-5Hz-lm-4B-Q8_0.gguf";
@@ -213,7 +301,54 @@ export function sanitizeMediaText(raw: string, max = MAX_TEXT): string {
     .slice(0, max);
 }
 
-// ---------- Prompt translation (gemma worker, CPU) ----------
+// ---------- Prompt translation (main LLM on the GPU, else the gemma worker on CPU) ----------
+
+const MAIN_LLM = "http://127.0.0.1:11434";
+
+/**
+ * The chat model on the GPU writes a prompt in ~1-2 s where the CPU gemma worker took 5-10 s.
+ * It is skipped (undefined) while the GPU is lent out (pause flag), while it is busy answering a
+ * chat (one slot), or when it fails, so a media job never waits on the conversation.
+ */
+async function askMainLlm(
+  system: string,
+  user: string,
+  maxTokens: number,
+): Promise<string | undefined> {
+  if (await exists(pauseFlag())) return undefined;
+  try {
+    const slots = await fetch(`${MAIN_LLM}/slots`, { signal: AbortSignal.timeout(2_000) });
+    if (slots.ok) {
+      const list = (await slots.json()) as Array<{ is_processing?: boolean }>;
+      if (list.some((slot) => slot.is_processing)) return undefined;
+    }
+    const response = await fetch(`${MAIN_LLM}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        max_tokens: maxTokens,
+        temperature: 0.3,
+        chat_template_kwargs: { enable_thinking: false },
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) return undefined;
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    return data.choices?.[0]?.message?.content?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function askPromptWriter(system: string, user: string, maxTokens: number): Promise<string> {
+  return (await askMainLlm(system, user, maxTokens)) ?? (await askGemma(system, user, maxTokens));
+}
 
 async function askGemma(system: string, user: string, maxTokens: number): Promise<string> {
   const worker = SPECIALIST_WORKERS.find((entry) => entry.key === "gemma");
@@ -253,7 +388,7 @@ async function askGemma(system: string, user: string, maxTokens: number): Promis
 const ASCII_ONLY = (text: string) => text.replace(/[^\x20-\x7E]/g, " ");
 
 async function toImageTags(request: string): Promise<string> {
-  const tags = await askGemma(
+  const tags = await askPromptWriter(
     "You write prompts for an anime Stable Diffusion XL model (Illustrious). Convert the user's request into 10-30 comma-separated English danbooru-style tags: subject count and gender, appearance, clothing, pose, expression, background, lighting, composition. Keep every detail the user asked for. Output only the tags.",
     request,
     200,
@@ -261,9 +396,19 @@ async function toImageTags(request: string): Promise<string> {
   return sanitizeMediaText(ASCII_ONLY(tags), 700);
 }
 
+/** Photo-real SDXL checkpoints follow short descriptive phrases better than anime tags. */
+async function toPhotoPrompt(request: string): Promise<string> {
+  const text = await askPromptWriter(
+    "You write prompts for a photorealistic Stable Diffusion XL model. Convert the user's request into one line of 15-35 comma-separated short English phrases: subject, age, ethnicity, hair, face and expression, body, clothing, pose, setting, lighting, camera shot and lens. People are adults; write an explicit adult age such as 'in her mid 20s'. Unless the user names another ethnicity or nationality, every person is Japanese: write 'Japanese woman' or 'Japanese man' and add 'East Asian facial features'. Keep every detail the user asked for. Output only the prompt.",
+    request,
+    220,
+  );
+  return sanitizeMediaText(ASCII_ONLY(text), 800);
+}
+
 /** Z-Image understands sentences better than booru tags. */
 async function toNaturalImagePrompt(request: string): Promise<string> {
-  const text = await askGemma(
+  const text = await askPromptWriter(
     "You write prompts for a text-to-image model. Rewrite the user's request as two to four vivid English sentences describing subject, appearance, clothing, pose, expression, setting, lighting, art style (anime illustration unless the user asks otherwise) and composition. Keep every detail the user asked for. Output only the prompt.",
     request,
     220,
@@ -271,15 +416,16 @@ async function toNaturalImagePrompt(request: string): Promise<string> {
   return sanitizeMediaText(ASCII_ONLY(text), 900);
 }
 
-/** Prompt text for the chosen image model: booru tags for SDXL, sentences for Z-Image. */
+/** Prompt text for the chosen image model: booru tags for anime SDXL, phrases for photo SDXL, sentences for Z-Image. */
 function imagePromptFor(job: MediaJob): Promise<string> {
-  return job.options.imageModel === "zimage"
-    ? toNaturalImagePrompt(job.request)
+  if (job.options.imageModel === "zimage") return toNaturalImagePrompt(job.request);
+  return SDXL_MODELS[sdxlModelOf(job)].photo
+    ? toPhotoPrompt(job.request)
     : toImageTags(job.request);
 }
 
 async function toMotionPrompt(request: string): Promise<string> {
-  const text = await askGemma(
+  const text = await askPromptWriter(
     "You write prompts for an image-to-video model. Describe in one or two short English sentences the motion and camera movement the user wants (what moves, how, camera). Output only the description.",
     request || "subtle natural motion, gentle camera movement",
     120,
@@ -289,7 +435,7 @@ async function toMotionPrompt(request: string): Promise<string> {
 
 /** LTX-2 renders sound too, so its prompt also describes what is heard. */
 async function toAudioVideoPrompt(request: string): Promise<string> {
-  const text = await askGemma(
+  const text = await askPromptWriter(
     "You write prompts for a video model that also generates the soundtrack. In two or three short English sentences describe the motion, the camera, and what is heard (voices, ambient sound, music, effects). Keep any spoken line in the user's language inside quotes. Output only the description.",
     request || "subtle natural motion, gentle camera movement, soft ambient sound",
     200,
@@ -297,8 +443,35 @@ async function toAudioVideoPrompt(request: string): Promise<string> {
   return sanitizeMediaText(text.replace(/[\r\n]+/g, " "), 700);
 }
 
+const H3_PREFIX = "integrated_multimodal_description:";
+
+/** MiniMax H3 reads a two-part script: the shot (with optional dialogue) and the soundscape. */
+async function toH3Prompt(request: string, seconds: number): Promise<string> {
+  const text = await askPromptWriter(
+    `You write prompts for MiniMax H3, which animates a first frame into a ${seconds}-second realistic clip with synchronized sound. Write exactly two lines in English:\n${H3_PREFIX} [Shot 1] A ${seconds}-second realistic single take. <who is in the frame, what they do, their expression, how the camera moves>\noverall_soundscape: <the sounds heard>\nPeople are adults. If someone should speak, put the words in Japanese inside the first line as (S1) <d>[Japanese] spoken words</d>. Keep every detail the user asked for. Output only the two lines.`,
+    request || "natural subtle motion with a gentle camera push in and soft ambient sound",
+    260,
+  );
+  return sanitizeH3Prompt(text);
+}
+
+/**
+ * H3's script needs line breaks, brackets and <d> tags, which sanitizeMediaText removes. It only
+ * travels inside the Wan2GP request JSON, never on a command line.
+ */
+export function sanitizeH3Prompt(raw: string): string {
+  const text = raw
+    .replace(/\r\n?/g, "\n")
+    .replace(/[^\p{L}\p{N} \n,.:;!?()'"_+\-/&[\]<>、。・ー〜～！？「」]/gu, "")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{2,}/g, "\n")
+    .trim()
+    .slice(0, 1_500);
+  return text.startsWith(H3_PREFIX) ? text : `${H3_PREFIX} [Shot 1] ${text}`;
+}
+
 async function toMusicCaption(request: string): Promise<string> {
-  const text = await askGemma(
+  const text = await askPromptWriter(
     "You write captions for a text-to-music model. Rewrite the user's request as one English sentence listing genre, mood, tempo feel, instruments and vocal type (for example: 'Upbeat J-pop with bright synths, punchy drums and a cheerful female vocal'). Output only the caption.",
     request,
     120,
@@ -362,6 +535,22 @@ function listeningPid(port: number): Promise<number | undefined> {
       },
     );
   });
+}
+
+/**
+ * Stops the CPU worker LLMs (~16 GB of RAM) for jobs that need nearly all memory; whoever uses
+ * a worker next starts it again on demand.
+ */
+async function stopCpuWorkers(): Promise<void> {
+  for (const worker of SPECIALIST_WORKERS) {
+    const pid = await listeningPid(worker.port);
+    if (!pid) continue;
+    try {
+      process.kill(pid);
+    } catch {
+      // Already gone.
+    }
+  }
 }
 
 async function releaseGpu(): Promise<void> {
@@ -553,9 +742,22 @@ async function renderWithImageWorker(
         else markStage(job, stage);
       },
     });
-    const spec = SDXL_MODELS[job.options.imageModel === "noobai" ? "noobai" : "wai"];
+    const model = sdxlModelOf(job);
+    const spec = SDXL_MODELS[model];
+    const sampling = sdxlSampling(model, job.options.fast === true);
     imageWorker?.stdin?.write(
-      `${JSON.stringify({ id, model: spec.file, vpred: spec.vpred, steps: spec.steps, cfg: spec.cfg, seed: -1, ...params })}\n`,
+      `${JSON.stringify({
+        id,
+        model: spec.file,
+        vpred: spec.vpred,
+        sampler: sampling.sampler,
+        steps: sampling.steps,
+        cfg: sampling.cfg,
+        lora: sampling.lora ?? null,
+        lora_scale: 1.0,
+        seed: -1,
+        ...params,
+      })}\n`,
     );
   });
 }
@@ -581,7 +783,8 @@ async function renderWithZImage(job: MediaJob, prompt: string, file: string): Pr
     JSON.stringify({
       output_dir: workDir,
       settings: {
-        model_type: "z_image",
+        // Nunchaku SVDQ INT4 (kernels in the Wan2GP venv): 49 s vs 65 s for the INT8 build, same look.
+        model_type: "z_image_nunchaku_r256_int4",
         prompt,
         resolution: size,
         num_inference_steps: 8,
@@ -623,7 +826,7 @@ async function renderImage(
     await renderWithZImage(job, `${sexual ? "An adult. " : ""}${tags}`, file);
     return;
   }
-  const spec = SDXL_MODELS[job.options.imageModel === "noobai" ? "noobai" : "wai"];
+  const spec = SDXL_MODELS[sdxlModelOf(job)];
   const negative = sexual ? `${spec.negative}, ${ADULT_ONLY_NEGATIVE}` : spec.negative;
   const positive = `${spec.quality}, ${sexual ? "adult, " : ""}${tags}`;
   if (await exists(IMAGE_SERVER)) {
@@ -678,10 +881,19 @@ async function runImageJob(job: MediaJob): Promise<void> {
   job.mime = "image/png";
 }
 
+/** LTX-2 ("audio") and H3 also need the soundtrack described; the other engines only motion. */
+function motionPromptFor(job: MediaJob): Promise<string> {
+  if (job.options.engine === "h3") return toH3Prompt(job.request, job.options.durationSec ?? 5);
+  return job.options.engine === "audio"
+    ? toAudioVideoPrompt(job.request)
+    : toMotionPrompt(job.request);
+}
+
 async function runVideoJob(job: MediaJob): Promise<void> {
   const aspect = job.options.aspect ?? "portrait";
   const [width, height] = SIZES[aspect].video;
   let initImage: string;
+  let motion: string | undefined;
   let sexual = isSexualRequest(job.request);
   if (job.options.sourceImageJobId) {
     const source =
@@ -701,16 +913,17 @@ async function runVideoJob(job: MediaJob): Promise<void> {
     const tags = await imagePromptFor(job);
     assertAllowedRequest(job.request, tags);
     sexual ||= isSexualRequest(tags);
+    // Written before the GPU is taken, while the chat model can still do it quickly.
+    motion = await motionPromptFor(job);
     markStage(job, "GPU を空けています");
     await acquireGpu();
     initImage = path.join(outDir(), `${job.id}-first.png`);
     await renderImage(job, tags, sexual, initImage);
   }
   const engine = job.options.engine ?? "standard";
-  const motion =
-    engine === "audio" ? await toAudioVideoPrompt(job.request) : await toMotionPrompt(job.request);
+  motion ??= await motionPromptFor(job);
   assertAllowedRequest(job.request, motion);
-  if (engine !== "standard") {
+  if (engine !== "standard" && engine !== "remix") {
     await runWan2gpVideo(job, engine, initImage, motion, sexual, aspect);
     return;
   }
@@ -719,51 +932,115 @@ async function runVideoJob(job: MediaJob): Promise<void> {
   const file = path.join(outDir(), `${job.id}.webm`);
   await runTool(
     sdCli(),
-    [
-      "-M",
-      "vid_gen",
-      "--diffusion-model",
-      VIDEO_MODEL,
-      "--vae",
-      VIDEO_VAE,
-      "--t5xxl",
-      VIDEO_T5,
-      "--clip_vision",
-      VIDEO_CLIP_VISION,
-      "-i",
+    sdcppVideoArgs(engine, {
       initImage,
-      "-p",
-      motion,
-      "-n",
-      sexual ? `${VIDEO_NEGATIVE}, ${ADULT_ONLY_NEGATIVE}` : VIDEO_NEGATIVE,
-      "-W",
-      String(width),
-      "-H",
-      String(height),
-      "--video-frames",
-      "33",
-      "--fps",
-      "16",
-      "--steps",
-      "4",
-      "--cfg-scale",
-      "1",
-      "--sampling-method",
-      "euler_a",
-      "--offload-to-cpu",
-      "--diffusion-fa",
-      "--vae-tiling",
-      "--backend",
-      "te=cpu",
-      "-s",
-      "-1",
-      "-o",
-      file,
-    ],
+      prompt: motion,
+      negative: sexual ? `${VIDEO_NEGATIVE}, ${ADULT_ONLY_NEGATIVE}` : VIDEO_NEGATIVE,
+      width,
+      height,
+      output: file,
+    }),
     { onLine: stepNote("動画を作っています", job) },
   );
   job.file = file;
   job.mime = "video/webm";
+  if (job.options.smooth) await smoothVideo(job);
+}
+
+/** sd.cpp arguments for a 2 s (33 frames, 16 fps) image-to-video clip. */
+export function sdcppVideoArgs(
+  engine: SdcppVideoEngine,
+  params: {
+    initImage: string;
+    prompt: string;
+    negative: string;
+    width: number;
+    height: number;
+    output: string;
+  },
+): string[] {
+  const model =
+    engine === "remix"
+      ? [
+          "--diffusion-model",
+          REMIX_LOW,
+          "--high-noise-diffusion-model",
+          REMIX_HIGH,
+          "--steps",
+          "6",
+          "--high-noise-steps",
+          "3",
+          "--cfg-scale",
+          "1",
+          "--high-noise-cfg-scale",
+          "1",
+          "--sampling-method",
+          "euler",
+          "--high-noise-sampling-method",
+          "euler",
+          "--flow-shift",
+          "5",
+        ]
+      : [
+          "--diffusion-model",
+          VIDEO_MODEL,
+          "--clip_vision",
+          VIDEO_CLIP_VISION,
+          "--steps",
+          "4",
+          "--cfg-scale",
+          "1",
+          "--sampling-method",
+          "euler_a",
+        ];
+  return [
+    "-M",
+    "vid_gen",
+    ...model,
+    "--vae",
+    VIDEO_VAE,
+    // The text encoder runs on the GPU too (offloaded between stages): 17 s instead of 31 s on CPU.
+    "--t5xxl",
+    VIDEO_T5,
+    "-i",
+    params.initImage,
+    "-p",
+    params.prompt,
+    "-n",
+    params.negative,
+    "-W",
+    String(params.width),
+    "-H",
+    String(params.height),
+    "--video-frames",
+    "33",
+    "--fps",
+    "16",
+    "--offload-to-cpu",
+    "--diffusion-fa",
+    // Tiles above the 256 px default need >7 GB for the Wan VAE on this card.
+    "--vae-tiling",
+    "-s",
+    "-1",
+    "-o",
+    params.output,
+  ];
+}
+
+/** Doubles the frame rate with RIFE (16 -> 32 fps); the clip keeps its length and motion. */
+async function smoothVideo(job: MediaJob): Promise<void> {
+  if (!job.file) return;
+  markStage(job, "なめらかにしています");
+  const smoothed = path.join(outDir(), `${job.id}-smooth.mp4`);
+  await runTool(WAN2GP_PYTHON, [RIFE_SCRIPT, job.file, smoothed, "2"], {
+    cwd: path.dirname(RIFE_SCRIPT),
+    timeoutMs: 10 * 60_000,
+  });
+  const file = path.join(outDir(), `${job.id}.mp4`);
+  await fs.rename(smoothed, file);
+  await fs.rm(job.file, { force: true });
+  job.file = file;
+  job.mime = "video/mp4";
 }
 
 // Wan2GP engines run headless through its Python API (openclaw_job.py); nothing is served on the network.
@@ -776,8 +1053,18 @@ const WAN2GP_SIZES: Record<NonNullable<MediaOptions["aspect"]>, string> = {
   landscape: "832x480",
 };
 const WAN2GP_ENGINES: Record<
-  Exclude<VideoEngine, "standard">,
-  { modelType: string; fps: number; frameStep: number; maxSec: number; label: string }
+  Exclude<VideoEngine, SdcppVideoEngine>,
+  {
+    modelType: string;
+    fps: number;
+    frameStep: number;
+    maxSec: number;
+    label: string;
+    /** Shortest clip the model makes; lengths grow from it in frameStep increments. */
+    minFrames?: number;
+    /** Needs most of the 64 GB RAM, so the CPU worker LLMs are stopped first. */
+    freesRam?: boolean;
+  }
 > = {
   long: {
     modelType: "i2v_2_2_Enhanced_Lightning_v2_svi2pro",
@@ -794,22 +1081,36 @@ const WAN2GP_ENGINES: Record<
     label: "音付き動画",
   },
   fast: { modelType: "ti2v_2_2_fastwan", fps: 24, frameStep: 4, maxSec: 5, label: "高速動画" },
+  // MiniMax H3 FL2VA pruned 20B with the 8-step PDD heads: video and sound together; ~45 GB of
+  // weights stream from RAM (Wan2GP profile 4). 5 s at 480x832 took ~9 min on the 4060.
+  h3: {
+    modelType: "minimax_h3_fl2va_pruned_pdd",
+    fps: 24,
+    frameStep: 17,
+    minFrames: 107,
+    maxSec: 10,
+    label: "音付き実写",
+    freesRam: true,
+  },
 };
 
-/** Frame count the model accepts: 1 + a multiple of its frame step. */
+/** Frame count the model accepts: 1 + a multiple of its frame step, or minFrames + a multiple. */
 export function wan2gpFrames(
   seconds: number,
   fps: number,
   frameStep: number,
   maxSec: number,
+  minFrames?: number,
 ): number {
   const clamped = Math.min(maxSec, Math.max(2, seconds));
+  if (minFrames)
+    return minFrames + frameStep * Math.max(0, Math.ceil((clamped * fps - minFrames) / frameStep));
   return Math.ceil((clamped * fps) / frameStep) * frameStep + 1;
 }
 
 async function runWan2gpVideo(
   job: MediaJob,
-  engine: Exclude<VideoEngine, "standard">,
+  engine: Exclude<VideoEngine, SdcppVideoEngine>,
   initImage: string,
   prompt: string,
   sexual: boolean,
@@ -835,13 +1136,17 @@ async function runWan2gpVideo(
           spec.fps,
           spec.frameStep,
           spec.maxSec,
+          spec.minFrames,
         ),
         seed: -1,
+        // Wan2GP's own RIFE pass keeps the soundtrack of the audio engine in sync.
+        ...(job.options.smooth ? { temporal_upsampling: "rife2" } : {}),
       },
     }),
   );
   markStage(job, "GPU を空けています");
   await acquireGpu();
+  if (spec.freesRam) await stopCpuWorkers();
   markStage(job, `${spec.label}を作っています（初回はモデルのダウンロードに時間がかかります）`);
   let produced: string[] = [];
   await runTool(WAN2GP_PYTHON, [WAN2GP_RUNNER, request], {
@@ -1010,16 +1315,34 @@ export async function startMediaJob(
   options: MediaOptions,
 ): Promise<MediaJob> {
   const status = await mediaStudioStatus();
-  const usesWan2gp = kind === "video" && (options.engine ?? "standard") !== "standard";
+  const engine = options.engine ?? "standard";
+  const usesWan2gp = kind === "video" && engine !== "standard" && engine !== "remix";
   const needed = usesWan2gp ? status.wan2gp : status[kind];
   if (!needed.ready) {
     throw new Error(`${kind} generation is not installed (missing: ${needed.missing.join(", ")})`);
   }
+  if (
+    kind === "video" &&
+    engine === "remix" &&
+    !((await exists(REMIX_HIGH)) && (await exists(REMIX_LOW)))
+  ) {
+    throw new Error("Remix のモデルが見つかりません");
+  }
+  if (kind === "video" && options.smooth && !usesWan2gp && !(await exists(RIFE_SCRIPT))) {
+    throw new Error("なめらか補間（RIFE）が見つかりません");
+  }
   if (options.imageModel === "zimage" && !status.wan2gp.ready) {
     throw new Error("Z-Image には Wan2GP が必要です");
   }
-  if (options.imageModel === "noobai" && !(await exists(SDXL_MODELS.noobai.file))) {
-    throw new Error("NoobAI のモデルが見つかりません");
+  if (
+    options.imageModel &&
+    options.imageModel !== "zimage" &&
+    !(await exists(SDXL_MODELS[options.imageModel].file))
+  ) {
+    throw new Error(`画像モデル（${options.imageModel}）のファイルが見つかりません`);
+  }
+  if (options.fast && !(await exists(DMD2_LORA))) {
+    throw new Error("高速モード（DMD2）のファイルが見つかりません");
   }
   const clean = sanitizeMediaText(request);
   if (!clean && kind !== "video") throw new Error("内容を入力してください");

@@ -91,6 +91,10 @@ private data class MediaItem(
 private const val MEDIA_POLL_MS = 4_000L
 private const val MEDIA_PREVIEW_MAX_PX = 900
 private const val MEDIA_UPLOAD_MAX_PX = 1344
+/** SDXL checkpoints that take the DMD2 "fast" mode (NoobAI is V-Pred, Z-Image runs elsewhere). */
+private val FAST_IMAGE_MODELS = setOf("wai", "lustify", "cyberreal", "asianreal")
+/** Video engines that make a fixed 2 s clip in sd.cpp (no length choice). */
+private val SDCPP_VIDEO_ENGINES = setOf("standard", "remix")
 
 private fun parseMediaItems(arr: JSONArray?): List<MediaItem> {
   val items = arr ?: return emptyList()
@@ -197,6 +201,8 @@ internal fun MediaStudioScreen(viewModel: MainViewModel, onBack: () -> Unit) {
   var musicSeconds by remember { mutableStateOf(90) }
   var videoEngine by remember { mutableStateOf("standard") }
   var imageModel by remember { mutableStateOf("wai") }
+  var fastImage by remember { mutableStateOf(false) }
+  var smoothVideo by remember { mutableStateOf(false) }
   var videoSeconds by remember { mutableStateOf(5) }
   var sourceImageJobId by remember { mutableStateOf<String?>(null) }
   var sourceImageBase64 by remember { mutableStateOf<String?>(null) }
@@ -252,10 +258,14 @@ internal fun MediaStudioScreen(viewModel: MainViewModel, onBack: () -> Unit) {
       isSending = true
       try {
         val params = JSONObject().put("kind", kind).put("prompt", prompt.trim())
-        if (kind != "music") params.put("aspect", aspect).put("imageModel", imageModel)
+        if (kind != "music") {
+          params.put("aspect", aspect).put("imageModel", imageModel)
+          if (fastImage && imageModel in FAST_IMAGE_MODELS) params.put("fast", true)
+        }
         if (kind == "video") {
           params.put("engine", videoEngine)
-          if (videoEngine != "standard") params.put("durationSec", videoSeconds)
+          if (videoEngine !in SDCPP_VIDEO_ENGINES) params.put("durationSec", videoSeconds)
+          if (smoothVideo) params.put("smooth", true)
           sourceImageJobId?.let { params.put("sourceImageJobId", it) }
           sourceImageBase64?.let { params.put("sourceImageBase64", it) }
         }
@@ -407,15 +417,22 @@ internal fun MediaStudioScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 style = ClawTheme.type.caption.copy(fontSize = 13.sp),
                 color = ClawTheme.colors.text,
               )
+              // Times measured on the RTX 4060 (2026-10-03), 2nd image onward; the first one also loads the model.
               val models =
                 listOf(
-                  Triple("wai", "WAI（標準）", "人気のアニメ絵。続けて作ると1枚約30秒"),
+                  Triple("wai", "WAI（標準）", "人気のアニメ絵。続けて作ると1枚約25秒（速い: 約12秒）"),
                   Triple("noobai", "NoobAI", "アニメの成人向けで評価が最も高い。体の描写が正確。約30秒〜1分"),
-                  Triple("zimage", "Z-Image", "文章の指示に強く、構図や小物も正確。1枚約1分半"),
+                  Triple("zimage", "Z-Image", "文章の指示に強く、構図や小物も正確。日本人の実写も自然。1枚約50秒"),
+                  Triple("asianreal", "実写 日本人", "日本人・アジア系の顔に特化した実写。約25秒（速い: 約12秒）"),
+                  Triple("lustify", "実写 LUSTIFY", "実写の制限解除版。成人向けの描写に強い。約25秒（速い: 約12秒）"),
+                  Triple("cyberreal", "実写 Cyber", "実写の制限解除版。肌や光が自然。約25秒（速い: 約12秒）"),
                 )
-              Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                models.forEach { (id, label, _) ->
-                  ChoiceChip(label = label, selected = imageModel == id, onClick = { imageModel = id }, modifier = Modifier.weight(1f))
+              models.chunked(3).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                  row.forEach { (id, label, _) ->
+                    ChoiceChip(label = label, selected = imageModel == id, onClick = { imageModel = id }, modifier = Modifier.weight(1f))
+                  }
+                  repeat(3 - row.size) { Spacer(modifier = Modifier.weight(1f)) }
                 }
               }
               Text(
@@ -424,6 +441,12 @@ internal fun MediaStudioScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 style = ClawTheme.type.caption,
                 color = ClawTheme.colors.textMuted,
               )
+              if (imageModel in FAST_IMAGE_MODELS) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                  ChoiceChip(label = "きれい", selected = !fastImage, onClick = { fastImage = false }, modifier = Modifier.weight(1f))
+                  ChoiceChip(label = "速い（DMD2）", selected = fastImage, onClick = { fastImage = true }, modifier = Modifier.weight(1f))
+                }
+              }
             }
 
             if (kind != "music") {
@@ -439,9 +462,11 @@ internal fun MediaStudioScreen(viewModel: MainViewModel, onBack: () -> Unit) {
               val engines =
                 listOf(
                   Triple("standard", "標準", "制限解除版。2秒・約5分"),
+                  Triple("remix", "実写 Remix", "実写向けの制限解除版。動きが大きい。2秒・約7分"),
                   Triple("long", "長い動画", "Wan2.2 SVI。5〜30秒、崩れにくい"),
                   Triple("audio", "音付き", "LTX-2。映像と音を同時に、〜10秒"),
                   Triple("fast", "高速", "FastWan 5B。〜5秒を速く"),
+                  Triple("h3", "音付き実写 H3", "MiniMax H3。実写の映像と声・環境音を同時に。5秒で約9分"),
                 )
               engines.chunked(2).forEach { row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -452,15 +477,20 @@ internal fun MediaStudioScreen(viewModel: MainViewModel, onBack: () -> Unit) {
               }
               Text(
                 text = engines.first { it.first == videoEngine }.third +
-                  if (videoEngine != "standard") "（初回はモデルのダウンロードで時間がかかります）" else "",
+                  if (videoEngine !in SDCPP_VIDEO_ENGINES) "（初回はモデルのダウンロードで時間がかかります）" else "",
                 style = ClawTheme.type.caption,
                 color = ClawTheme.colors.textMuted,
               )
-              if (videoEngine != "standard") {
+              Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                ChoiceChip(label = "ふつう", selected = !smoothVideo, onClick = { smoothVideo = false }, modifier = Modifier.weight(1f))
+                ChoiceChip(label = "なめらか（2倍）", selected = smoothVideo, onClick = { smoothVideo = true }, modifier = Modifier.weight(1f))
+              }
+              if (videoEngine !in SDCPP_VIDEO_ENGINES) {
                 val choices =
                   when (videoEngine) {
                     "long" -> listOf(5, 10, 20, 30)
                     "audio" -> listOf(4, 6, 8, 10)
+                    "h3" -> listOf(5, 8, 10)
                     else -> listOf(3, 5)
                   }
                 if (videoSeconds !in choices) videoSeconds = choices.first()
