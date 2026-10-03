@@ -196,6 +196,7 @@ internal fun MediaStudioScreen(viewModel: MainViewModel, onBack: () -> Unit) {
   var instrumental by remember { mutableStateOf(false) }
   var musicSeconds by remember { mutableStateOf(90) }
   var videoEngine by remember { mutableStateOf("standard") }
+  var imageModel by remember { mutableStateOf("wai") }
   var videoSeconds by remember { mutableStateOf(5) }
   var sourceImageJobId by remember { mutableStateOf<String?>(null) }
   var sourceImageBase64 by remember { mutableStateOf<String?>(null) }
@@ -251,7 +252,7 @@ internal fun MediaStudioScreen(viewModel: MainViewModel, onBack: () -> Unit) {
       isSending = true
       try {
         val params = JSONObject().put("kind", kind).put("prompt", prompt.trim())
-        if (kind != "music") params.put("aspect", aspect)
+        if (kind != "music") params.put("aspect", aspect).put("imageModel", imageModel)
         if (kind == "video") {
           params.put("engine", videoEngine)
           if (videoEngine != "standard") params.put("durationSec", videoSeconds)
@@ -399,6 +400,31 @@ internal fun MediaStudioScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 },
               modifier = Modifier.fillMaxWidth(),
             )
+
+            if (kind == "image" || (kind == "video" && sourceImageJobId == null && sourceImageBase64 == null)) {
+              Text(
+                text = if (kind == "image") "絵のモデル" else "最初の1枚のモデル",
+                style = ClawTheme.type.caption.copy(fontSize = 13.sp),
+                color = ClawTheme.colors.text,
+              )
+              val models =
+                listOf(
+                  Triple("wai", "WAI（標準）", "人気のアニメ絵。続けて作ると1枚約30秒"),
+                  Triple("noobai", "NoobAI", "アニメの成人向けで評価が最も高い。体の描写が正確。約30秒〜1分"),
+                  Triple("zimage", "Z-Image", "文章の指示に強く、構図や小物も正確。1枚約1分半"),
+                )
+              Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                models.forEach { (id, label, _) ->
+                  ChoiceChip(label = label, selected = imageModel == id, onClick = { imageModel = id }, modifier = Modifier.weight(1f))
+                }
+              }
+              Text(
+                text = models.first { it.first == imageModel }.third +
+                  if (imageModel == "zimage") "（初回はモデルのダウンロードがあります）" else "",
+                style = ClawTheme.type.caption,
+                color = ClawTheme.colors.textMuted,
+              )
+            }
 
             if (kind != "music") {
               Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {

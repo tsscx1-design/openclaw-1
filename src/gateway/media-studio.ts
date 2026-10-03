@@ -54,6 +54,8 @@ export type MediaOptions = {
    * "fast" = FastWan 2.2 5B (3 steps).
    */
   engine?: VideoEngine;
+  /** image model for images and for the first frame of text-to-video */
+  imageModel?: ImageModel;
   /** music, and video length for the Wan2GP engines */
   lyrics?: string;
   instrumental?: boolean;
@@ -61,9 +63,36 @@ export type MediaOptions = {
 };
 
 export type VideoEngine = "standard" | "long" | "audio" | "fast";
+export type ImageModel = "wai" | "noobai" | "zimage";
 
 const MEDIA_MODEL_DIR = "D:\\media-models";
 const IMAGE_MODEL = path.join(MEDIA_MODEL_DIR, "image", "waiIllustriousSDXL_v170.safetensors");
+
+/** SDXL checkpoints served by the resident worker; Z-Image runs in Wan2GP instead. */
+const SDXL_MODELS: Record<
+  Exclude<ImageModel, "zimage">,
+  { file: string; vpred: boolean; steps: number; cfg: number; quality: string; negative: string }
+> = {
+  wai: {
+    file: IMAGE_MODEL,
+    vpred: false,
+    steps: 28,
+    cfg: 6,
+    quality: "masterpiece, best quality, amazing quality, very aesthetic, absurdres",
+    negative:
+      "lowres, worst quality, bad quality, bad anatomy, bad hands, extra digits, fewer digits, jpeg artifacts, signature, watermark, username, blurry, sketch",
+  },
+  // NoobAI-XL V-Pred 1.0: recommended Euler with CFG 3.5-5.5 and 28-35 steps.
+  noobai: {
+    file: path.join(MEDIA_MODEL_DIR, "image", "NoobAI-XL-Vpred-v1.0.safetensors"),
+    vpred: true,
+    steps: 30,
+    cfg: 4.5,
+    quality: "masterpiece, best quality, newest, absurdres, highres",
+    negative:
+      "worst quality, old, early, low quality, lowres, signature, username, logo, bad hands, mutated hands, bad anatomy, watermark",
+  },
+};
 const VIDEO_DIR = path.join(MEDIA_MODEL_DIR, "video");
 const VIDEO_MODEL = path.join(VIDEO_DIR, "wan2.2-i2v-rapid-aio-v10-nsfw-Q3_K_S.gguf");
 const VIDEO_VAE = path.join(VIDEO_DIR, "wan_2.1_vae.safetensors");
@@ -79,9 +108,6 @@ const MAX_QUEUE = 4;
 const KEEP_RESULTS = 60;
 const MAX_TEXT = 500;
 
-const IMAGE_QUALITY = "masterpiece, best quality, amazing quality, very aesthetic, absurdres";
-const IMAGE_NEGATIVE =
-  "lowres, worst quality, bad quality, bad anatomy, bad hands, extra digits, fewer digits, jpeg artifacts, signature, watermark, username, blurry, sketch";
 const VIDEO_NEGATIVE =
   "static, still image, blurry, low quality, distorted, deformed, extra limbs, flicker, watermark, text";
 // Added whenever a request is sexual, on top of refusing sexual requests that mention minors.
@@ -233,6 +259,23 @@ async function toImageTags(request: string): Promise<string> {
     200,
   );
   return sanitizeMediaText(ASCII_ONLY(tags), 700);
+}
+
+/** Z-Image understands sentences better than booru tags. */
+async function toNaturalImagePrompt(request: string): Promise<string> {
+  const text = await askGemma(
+    "You write prompts for a text-to-image model. Rewrite the user's request as two to four vivid English sentences describing subject, appearance, clothing, pose, expression, setting, lighting, art style (anime illustration unless the user asks otherwise) and composition. Keep every detail the user asked for. Output only the prompt.",
+    request,
+    220,
+  );
+  return sanitizeMediaText(ASCII_ONLY(text), 900);
+}
+
+/** Prompt text for the chosen image model: booru tags for SDXL, sentences for Z-Image. */
+function imagePromptFor(job: MediaJob): Promise<string> {
+  return job.options.imageModel === "zimage"
+    ? toNaturalImagePrompt(job.request)
+    : toImageTags(job.request);
 }
 
 async function toMotionPrompt(request: string): Promise<string> {
@@ -510,8 +553,9 @@ async function renderWithImageWorker(
         else markStage(job, stage);
       },
     });
+    const spec = SDXL_MODELS[job.options.imageModel === "noobai" ? "noobai" : "wai"];
     imageWorker?.stdin?.write(
-      `${JSON.stringify({ id, model: IMAGE_MODEL, vpred: false, steps: 28, cfg: 6, seed: -1, ...params })}\n`,
+      `${JSON.stringify({ id, model: spec.file, vpred: spec.vpred, steps: spec.steps, cfg: spec.cfg, seed: -1, ...params })}\n`,
     );
   });
 }
@@ -526,6 +570,48 @@ async function waitForMoreJobs(ms: number): Promise<boolean> {
   return queue.length > 0;
 }
 
+/** Z-Image Turbo (6B, 8 steps) through the Wan2GP runner; it reads natural-language prompts. */
+async function renderWithZImage(job: MediaJob, prompt: string, file: string): Promise<void> {
+  const size = ZIMAGE_SIZES[job.options.aspect ?? "portrait"];
+  const workDir = path.join(outDir(), `${job.id}-zimg`);
+  await fs.mkdir(workDir, { recursive: true });
+  const request = path.join(workDir, "request.json");
+  await fs.writeFile(
+    request,
+    JSON.stringify({
+      output_dir: workDir,
+      settings: {
+        model_type: "z_image",
+        prompt,
+        resolution: size,
+        num_inference_steps: 8,
+        guidance_scale: 0,
+        seed: -1,
+      },
+    }),
+  );
+  markStage(job, "画像を描いています（Z-Image。初回はモデルのダウンロードがあります）");
+  let produced: string[] = [];
+  await runTool(WAN2GP_PYTHON, [WAN2GP_RUNNER, request], {
+    cwd: WAN2GP_DIR,
+    timeoutMs: 2 * 60 * 60_000,
+    onLine: (line) => {
+      const result = /^RESULT (.*)$/.exec(line)?.[1];
+      if (result) produced = JSON.parse(result) as string[];
+    },
+  });
+  const image = produced.find((f) => /\.(png|jpe?g|webp)$/i.test(f));
+  if (!image) throw new Error("Z-Image が画像を出力しませんでした");
+  await fs.rename(image, file);
+  await fs.rm(workDir, { recursive: true, force: true });
+}
+
+const ZIMAGE_SIZES: Record<NonNullable<MediaOptions["aspect"]>, string> = {
+  square: "1024x1024",
+  portrait: "832x1216",
+  landscape: "1216x832",
+};
+
 async function renderImage(
   job: MediaJob,
   tags: string,
@@ -533,8 +619,13 @@ async function renderImage(
   file: string,
 ): Promise<void> {
   const [width, height] = SIZES[job.options.aspect ?? "portrait"].image;
-  const negative = sexual ? `${IMAGE_NEGATIVE}, ${ADULT_ONLY_NEGATIVE}` : IMAGE_NEGATIVE;
-  const positive = `${IMAGE_QUALITY}, ${sexual ? "adult, " : ""}${tags}`;
+  if (job.options.imageModel === "zimage") {
+    await renderWithZImage(job, `${sexual ? "An adult. " : ""}${tags}`, file);
+    return;
+  }
+  const spec = SDXL_MODELS[job.options.imageModel === "noobai" ? "noobai" : "wai"];
+  const negative = sexual ? `${spec.negative}, ${ADULT_ONLY_NEGATIVE}` : spec.negative;
+  const positive = `${spec.quality}, ${sexual ? "adult, " : ""}${tags}`;
   if (await exists(IMAGE_SERVER)) {
     try {
       await renderWithImageWorker(job, { prompt: positive, negative, width, height, output: file });
@@ -577,7 +668,7 @@ async function renderImage(
 
 async function runImageJob(job: MediaJob): Promise<void> {
   markStage(job, "指示を英語のタグに変換しています");
-  const tags = await toImageTags(job.request);
+  const tags = await imagePromptFor(job);
   assertAllowedRequest(job.request, tags);
   markStage(job, "GPU を空けています");
   await acquireGpu();
@@ -607,7 +698,7 @@ async function runVideoJob(job: MediaJob): Promise<void> {
   } else {
     // Text-to-video: draw the first frame with the image model, then animate it.
     markStage(job, "指示を英語のタグに変換しています");
-    const tags = await toImageTags(job.request);
+    const tags = await imagePromptFor(job);
     assertAllowedRequest(job.request, tags);
     sexual ||= isSexualRequest(tags);
     markStage(job, "GPU を空けています");
@@ -923,6 +1014,12 @@ export async function startMediaJob(
   const needed = usesWan2gp ? status.wan2gp : status[kind];
   if (!needed.ready) {
     throw new Error(`${kind} generation is not installed (missing: ${needed.missing.join(", ")})`);
+  }
+  if (options.imageModel === "zimage" && !status.wan2gp.ready) {
+    throw new Error("Z-Image には Wan2GP が必要です");
+  }
+  if (options.imageModel === "noobai" && !(await exists(SDXL_MODELS.noobai.file))) {
+    throw new Error("NoobAI のモデルが見つかりません");
   }
   const clean = sanitizeMediaText(request);
   if (!clean && kind !== "video") throw new Error("内容を入力してください");
