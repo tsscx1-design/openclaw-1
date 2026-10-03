@@ -404,6 +404,128 @@ function stepNote(prefix: string, job: MediaJob) {
   };
 }
 
+// ---------- Resident SDXL worker (PyTorch) ----------
+// diffusers on the GPU samples ~2.5x faster than sd.cpp, and keeping the process (weights in RAM)
+// between images also skips ~15 s of start-up. It holds the CUDA context, so it is stopped before
+// the GPU goes back to the chat model.
+
+const IMAGE_SERVER = "D:\\media-tools\\image\\sdxl_server.py";
+/** After the queue drains, wait this long for another job before handing the GPU back. */
+const IMAGE_GRACE_MS = 45_000;
+let imageWorker: ReturnType<typeof spawn> | undefined;
+let imageWorkerReady: Promise<void> | undefined;
+const imageRequests = new Map<
+  string,
+  { resolve: () => void; reject: (err: Error) => void; onStep: (step: string) => void }
+>();
+
+function startImageWorker(): Promise<void> {
+  if (imageWorker && imageWorkerReady) return imageWorkerReady;
+  const child = spawn(WAN2GP_PYTHON, [IMAGE_SERVER], {
+    cwd: path.dirname(IMAGE_SERVER),
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  try {
+    if (child.pid) os.setPriority(child.pid, os.constants.priority.PRIORITY_NORMAL);
+  } catch {
+    // Priority is best-effort.
+  }
+  imageWorker = child;
+  let stderrTail = "";
+  child.stderr?.on("data", (chunk) => {
+    stderrTail = (stderrTail + String(chunk)).slice(-1_500);
+  });
+  imageWorkerReady = new Promise<void>((resolve, reject) => {
+    let buffer = "";
+    child.stdout?.on("data", (chunk) => {
+      buffer += String(chunk);
+      let newline: number;
+      while ((newline = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (line === "READY") {
+          resolve();
+          continue;
+        }
+        const match = /^(\S+) (STEP|RESULT|ERROR) ?(.*)$/.exec(line);
+        const pending = match ? imageRequests.get(match[1] ?? "") : undefined;
+        if (!match || !pending) continue;
+        if (match[2] === "STEP") pending.onStep(match[3] ?? "");
+        else {
+          imageRequests.delete(match[1] ?? "");
+          if (match[2] === "RESULT") pending.resolve();
+          else pending.reject(new Error(match[3] || "image worker error"));
+        }
+      }
+    });
+    child.on("exit", (code) => {
+      const error = new Error(`image worker exited (${code}): ${stderrTail.trim().slice(-300)}`);
+      reject(error);
+      for (const pending of imageRequests.values()) pending.reject(error);
+      imageRequests.clear();
+      if (imageWorker === child) {
+        imageWorker = undefined;
+        imageWorkerReady = undefined;
+      }
+    });
+    child.on("error", reject);
+  });
+  return imageWorkerReady;
+}
+
+function stopImageWorker(): void {
+  const child = imageWorker;
+  imageWorker = undefined;
+  imageWorkerReady = undefined;
+  if (!child) return;
+  child.stdin?.end();
+  setTimeout(() => child.kill(), 10_000).unref();
+}
+
+async function renderWithImageWorker(
+  job: MediaJob,
+  params: { prompt: string; negative: string; width: number; height: number; output: string },
+): Promise<void> {
+  markStage(job, "画像の準備をしています");
+  await startImageWorker();
+  const id = randomBytes(4).toString("hex");
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      imageRequests.delete(id);
+      reject(new Error("image worker timed out"));
+    }, 10 * 60_000);
+    imageRequests.set(id, {
+      resolve: () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      reject: (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+      onStep: (step) => {
+        const stage = `画像を描いています ${step}`;
+        if (job.stage?.startsWith("画像を描いています")) job.stage = stage;
+        else markStage(job, stage);
+      },
+    });
+    imageWorker?.stdin?.write(
+      `${JSON.stringify({ id, model: IMAGE_MODEL, vpred: false, steps: 28, cfg: 6, seed: -1, ...params })}\n`,
+    );
+  });
+}
+
+/** Keeps the GPU (and the warm image worker) for a short while in case another job follows. */
+async function waitForMoreJobs(ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (queue.length > 0) return true;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return queue.length > 0;
+}
+
 async function renderImage(
   job: MediaJob,
   tags: string,
@@ -413,6 +535,16 @@ async function renderImage(
   const [width, height] = SIZES[job.options.aspect ?? "portrait"].image;
   const negative = sexual ? `${IMAGE_NEGATIVE}, ${ADULT_ONLY_NEGATIVE}` : IMAGE_NEGATIVE;
   const positive = `${IMAGE_QUALITY}, ${sexual ? "adult, " : ""}${tags}`;
+  if (await exists(IMAGE_SERVER)) {
+    try {
+      await renderWithImageWorker(job, { prompt: positive, negative, width, height, output: file });
+      return;
+    } catch (err) {
+      // Fall through to sd.cpp so a broken Python environment never blocks image jobs.
+      stopImageWorker();
+      markStage(job, `画像を描いています（予備の方式に切替: ${String(err).slice(0, 80)}）`);
+    }
+  }
   await runTool(
     sdCli(),
     [
@@ -763,14 +895,21 @@ async function processQueue(): Promise<void> {
         job.durationSec = Math.round((job.finishedAt - (job.startedAt ?? job.finishedAt)) / 1000);
         job.options.sourceImageBase64 = undefined;
         await saveJobMeta(job).catch(() => undefined);
-        // Hand the GPU back between jobs only when nothing else is waiting.
-        if (queue.length === 0) await releaseGpu();
+        // Hand the GPU back between jobs only when nothing else is waiting. A warm image worker
+        // gets a short grace period so a follow-up image skips the start-up.
+        if (queue.length === 0 && !(imageWorker && (await waitForMoreJobs(IMAGE_GRACE_MS)))) {
+          stopImageWorker();
+          await releaseGpu();
+        }
       }
     }
     await pruneResults().catch(() => undefined);
   } finally {
     working = false;
-    if (queue.length === 0) await releaseGpu();
+    if (queue.length === 0) {
+      stopImageWorker();
+      await releaseGpu();
+    }
   }
 }
 
