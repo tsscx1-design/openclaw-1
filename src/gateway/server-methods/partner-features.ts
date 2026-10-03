@@ -47,6 +47,7 @@ import {
   type PartnerFact,
 } from "../partner-store.js";
 import { listTtsSpeakers, sanitizePartnerVoice, synthesizeSpeech } from "../partner-tts.js";
+import { listCloneVoices, synthesizeCloneSpeech } from "../partner-voice-clone.js";
 import { executeSpecialistTask } from "../specialist-router.js";
 import { cleanGeneratedText, isFailedReplyText } from "../text-hygiene.js";
 import {
@@ -911,7 +912,7 @@ ${userInput.slice(0, 2000)}`,
     respond(true, { success: true, settings: next }, undefined);
   }),
 
-  // --- キャラクターボイス（VOICEVOX / AivisSpeech） ---
+  // --- キャラクターボイス（VOICEVOX / AivisSpeech / 声まね Qwen3-TTS） ---
   "partner.tts.speakers": guarded(async (_params, respond) => {
     // Voices trained in the studio show their own names instead of the model id.
     const trained = new Map(
@@ -924,7 +925,8 @@ ${userInput.slice(0, 2000)}`,
         ? { ...s, speakerName: `${trained.get(s.speakerId)}（自作）`, styleName: "ノーマル" }
         : s,
     );
-    respond(true, { speakers }, undefined);
+    // Studio recordings can be imitated right away with Qwen3-TTS, before any night training.
+    respond(true, { speakers: [...(await listCloneVoices()), ...speakers] }, undefined);
   }),
 
   // --- 声作りスタジオ（本人の声 or 許可を得た声のみ） ---
@@ -974,7 +976,11 @@ ${userInput.slice(0, 2000)}`,
       fail(respond, "No PC voice is set for this partner");
       return;
     }
-    const audio = await synthesizeSpeech(voice, str(params, "text") ?? "");
+    const text = str(params, "text") ?? "";
+    const audio =
+      voice.engine === "clone"
+        ? await synthesizeCloneSpeech(voice, text)
+        : await synthesizeSpeech(voice, text);
     respond(true, { mimeType: "audio/wav", audioBase64: audio.toString("base64") }, undefined);
   }),
 

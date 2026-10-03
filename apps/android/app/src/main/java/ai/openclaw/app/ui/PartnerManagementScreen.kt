@@ -569,8 +569,14 @@ internal fun PartnerManagementScreen(
               items(voiceSpeakers) { sp ->
                 val engine = sp.optString("engine")
                 val label = "${sp.optString("speakerName")}（${sp.optString("styleName")}）"
+                // Clone voices are identified by their voice-studio recording, not a style id.
+                val voiceId = sp.optString("voiceId")
                 val voice = JSONObject().put("engine", engine).put("speakerId", sp.optInt("speakerId")).put("label", label)
-                val selected = setVoice?.optString("engine") == engine && setVoice?.optInt("speakerId") == sp.optInt("speakerId")
+                if (voiceId.isNotEmpty()) voice.put("voiceId", voiceId)
+                val selected =
+                  setVoice?.optString("engine") == engine &&
+                    setVoice?.optInt("speakerId") == sp.optInt("speakerId") &&
+                    setVoice?.optString("voiceId").orEmpty() == voiceId
                 Row(
                   modifier =
                     Modifier
@@ -582,7 +588,15 @@ internal fun PartnerManagementScreen(
                 ) {
                   Column(modifier = Modifier.weight(1f)) {
                     Text(label, style = ClawTheme.type.body.copy(fontSize = 14.sp), color = ClawTheme.colors.text)
-                    Text(if (engine == "aivis") "AivisSpeech" else "VOICEVOX", style = ClawTheme.type.caption.copy(fontSize = 11.sp), color = ClawTheme.colors.textMuted)
+                    Text(
+                      when (engine) {
+                        "aivis" -> "AivisSpeech"
+                        "clone" -> "声まね（録音した声をまねる・約5秒で作成）"
+                        else -> "VOICEVOX"
+                      },
+                      style = ClawTheme.type.caption.copy(fontSize = 11.sp),
+                      color = ClawTheme.colors.textMuted,
+                    )
                   }
                   TextButton(onClick = {
                     if (pid == null) return@TextButton

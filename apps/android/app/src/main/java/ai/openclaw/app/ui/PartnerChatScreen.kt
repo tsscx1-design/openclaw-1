@@ -184,12 +184,34 @@ internal fun PartnerChatScreen(
   var voicePitch by remember { mutableStateOf(1f) }
   var voiceRate by remember { mutableStateOf(1f) }
   val tts = remember { mutableStateOf<android.speech.tts.TextToSpeech?>(null) }
+  // Which message is being read aloud (PC voice or phone voice), so its button can stop it.
+  val pcSpeakingKey by PartnerVoicePlayer.playingKey.collectAsState()
+  var phoneSpeakingKey by remember { mutableStateOf<String?>(null) }
+  val speakingKey = pcSpeakingKey ?: phoneSpeakingKey
+  var speakJob by remember { mutableStateOf<Job?>(null) }
+  // 「いつも読む」: every new reply is read aloud without pressing play. Kept on the phone.
+  val voicePrefs = remember { ttsContext.getSharedPreferences("partner_voice", android.content.Context.MODE_PRIVATE) }
+  var autoRead by remember { mutableStateOf(voicePrefs.getBoolean("auto_read", false)) }
   DisposableEffect(Unit) {
     lateinit var engine: android.speech.tts.TextToSpeech
     engine =
       android.speech.tts.TextToSpeech(ttsContext) { status ->
         if (status == android.speech.tts.TextToSpeech.SUCCESS) {
           engine.language = java.util.Locale.JAPANESE
+          engine.setOnUtteranceProgressListener(
+            object : android.speech.tts.UtteranceProgressListener() {
+              override fun onStart(utteranceId: String?) {}
+
+              override fun onDone(utteranceId: String?) {
+                if (phoneSpeakingKey == utteranceId) phoneSpeakingKey = null
+              }
+
+              @Deprecated("Deprecated in Java")
+              override fun onError(utteranceId: String?) {
+                if (phoneSpeakingKey == utteranceId) phoneSpeakingKey = null
+              }
+            },
+          )
           tts.value = engine
         }
       }
@@ -197,6 +219,7 @@ internal fun PartnerChatScreen(
       engine.stop()
       engine.shutdown()
       tts.value = null
+      PartnerVoicePlayer.stop()
     }
   }
   LaunchedEffect(partnerId) {
@@ -210,29 +233,43 @@ internal fun PartnerChatScreen(
     }
   }
 
-  fun speakWithPhoneTts(text: String) {
+  fun speakWithPhoneTts(text: String, key: String) {
     val engine = tts.value ?: return
     engine.setPitch(voicePitch)
     engine.setSpeechRate(voiceRate)
+    phoneSpeakingKey = key
     // Drop action notes like （笑顔で頷く） that should not be read aloud.
-    engine.speak(text.replace(Regex("（[^）]*）|\\([^)]*\\)"), ""), android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "partner-${System.currentTimeMillis()}")
+    engine.speak(text.replace(Regex("（[^）]*）|\\([^)]*\\)"), ""), android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, key)
   }
 
-  fun speak(text: String) {
+  /** Stops whatever is being read, including a PC voice that is still being synthesized. */
+  fun stopSpeaking() {
+    speakJob?.cancel()
+    speakJob = null
+    PartnerVoicePlayer.stop()
+    tts.value?.stop()
+    phoneSpeakingKey = null
+  }
+
+  fun speak(text: String, key: String) {
+    stopSpeaking()
     val pid = partnerId
     if (pid != null) {
-      coroutineScope.launch {
-        val played =
-          try {
-            PartnerVoicePlayer.speak(ttsContext, viewModel, pid, text)
-          } catch (e: Exception) {
-            statusMessage = friendlyError("読み上げ", e)
-            true
-          }
-        if (!played) speakWithPhoneTts(text)
-      }
+      speakJob =
+        coroutineScope.launch {
+          val played =
+            try {
+              PartnerVoicePlayer.speak(ttsContext, viewModel, pid, text, key = key)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+              throw e
+            } catch (e: Exception) {
+              statusMessage = friendlyError("読み上げ", e)
+              true
+            }
+          if (!played) speakWithPhoneTts(text, key)
+        }
     } else {
-      speakWithPhoneTts(text)
+      speakWithPhoneTts(text, key)
     }
   }
   // "auto" (✨自動判定 - デフォルト), "deep" (🧠熟考 - Bonsai2フルパワー), "instant" (⚡即答 0.5s - 挨拶・緊急用)
@@ -350,6 +387,10 @@ internal fun PartnerChatScreen(
         }
         // --- 🌟 スラスラ応答（リアルタイム・タイピングストリーミング演出） ---
         val lastAssistant = list.lastOrNull { it.role == "assistant" }
+        // Start the voice right away so the PC synthesizes while the text types itself out.
+        if (autoRead && lastAssistant != null && lastAssistant.content.isNotBlank()) {
+          speak(lastAssistant.content, lastAssistant.id)
+        }
         if (lastAssistant != null && lastAssistant.content.isNotBlank()) {
           val fullText = lastAssistant.content
           val historyBase = list.dropLast(1)
@@ -735,15 +776,16 @@ internal fun PartnerChatScreen(
                     color = ClawTheme.colors.text,
                   )
                   if (!isUser) {
+                    val speakingThis = speakingKey == msg.id
                     Text(
-                      text = "🔊 読み上げ",
-                      style = ClawTheme.type.caption.copy(fontSize = 11.sp),
-                      color = ClawTheme.colors.textMuted,
+                      text = if (speakingThis) "⏹ 止める" else "🔊 読み上げ",
+                      style = ClawTheme.type.caption.copy(fontSize = 11.sp, fontWeight = if (speakingThis) FontWeight.Bold else FontWeight.Normal),
+                      color = if (speakingThis) ClawTheme.colors.primary else ClawTheme.colors.textMuted,
                       modifier =
                         Modifier
                           .padding(top = 4.dp)
                           .clip(RoundedCornerShape(6.dp))
-                          .clickable { speak(msg.content) }
+                          .clickable { if (speakingThis) stopSpeaking() else speak(msg.content, msg.id) }
                           .padding(horizontal = 4.dp, vertical = 6.dp),
                     )
                     Text(
@@ -854,6 +896,51 @@ internal fun PartnerChatScreen(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
+        // Reading aloud: a stop button while speaking, then 「いつも読む / 読まない」.
+        if (speakingKey != null) {
+          item {
+            Surface(
+              shape = RoundedCornerShape(12.dp),
+              color = ClawTheme.colors.primary.copy(alpha = 0.2f),
+              border = BorderStroke(1.dp, ClawTheme.colors.primary),
+              onClick = { stopSpeaking() },
+            ) {
+              Text(
+                text = "⏹ 読み上げを止める",
+                style = ClawTheme.type.caption.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
+                color = ClawTheme.colors.primary,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+              )
+            }
+          }
+        }
+        items(2) { index ->
+          val on = index == 0
+          val isSelected = autoRead == on
+          Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = if (isSelected) ClawTheme.colors.primary.copy(alpha = 0.2f) else ClawTheme.colors.surfaceRaised,
+            border = BorderStroke(
+              1.dp,
+              if (isSelected) ClawTheme.colors.primary else ClawTheme.colors.primary.copy(alpha = 0.15f),
+            ),
+            onClick = {
+              autoRead = on
+              voicePrefs.edit().putBoolean("auto_read", on).apply()
+              if (!on) stopSpeaking()
+            },
+          ) {
+            Text(
+              text = if (on) "🔊 いつも読む" else "🔇 読まない",
+              style = ClawTheme.type.caption.copy(
+                fontSize = 11.sp,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+              ),
+              color = if (isSelected) ClawTheme.colors.primary else ClawTheme.colors.textMuted,
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            )
+          }
+        }
         items(thinkingModes.size) { index ->
           val (mode, label) = thinkingModes[index]
           val isSelected = thinkingMode == mode

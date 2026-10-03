@@ -172,7 +172,7 @@ internal fun VoiceStudioScreen(viewModel: MainViewModel, onBack: () -> Unit) {
           Text("🎙 声を作る", style = ClawTheme.type.display.copy(fontSize = 20.sp), color = ClawTheme.colors.text)
         }
         Text(
-          "録音から、パートナー用のオリジナルの声を作ります。学習は夜の空き時間にPCが自動で行い、その間メインのチャットは止まります。",
+          "録音から、パートナー用のオリジナルの声を作ります。録音を入れるとすぐ「声まね」としてパートナーの声に選べます（3秒以上・雑音の少ない声）。より自然な声の学習は夜の空き時間にPCが自動で行い、その間メインのチャットは止まります。",
           style = ClawTheme.type.caption.copy(fontSize = 12.5.sp),
           color = ClawTheme.colors.textMuted,
         )

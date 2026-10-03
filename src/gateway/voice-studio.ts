@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { readJsonFile, resolveOpenClawHome, writeJsonFile } from "./partner-store.js";
-import { ensureTtsEngine } from "./partner-tts.js";
+import { ensureTtsEngine, VOICE_PROJECT_ID as VOICE_ID } from "./partner-tts.js";
 
 /**
  * Voice studio: users upload recordings of their own (or consenting) voice; training runs in a
@@ -30,13 +30,12 @@ export type VoiceStudioSettings = { windowStartHour: number; windowEndHour: numb
 const DEFAULT_SETTINGS: VoiceStudioSettings = { windowStartHour: 1, windowEndHour: 6 };
 const MAX_UPLOAD_BYTES = 300 * 1024 * 1024;
 const ALLOWED_EXT = /\.(mp3|wav|m4a|aac|ogg|flac|opus|webm|mp4)$/i;
-const VOICE_ID = /^voice-[a-z0-9-]{8,60}$/;
 
 function studioRoot(): string {
   return path.join(resolveOpenClawHome(), "tts", "voices");
 }
 
-function projectDir(id: string): string {
+export function projectDir(id: string): string {
   if (!VOICE_ID.test(id)) throw new Error(`Invalid voice id: ${id.slice(0, 40)}`);
   return path.join(studioRoot(), id);
 }

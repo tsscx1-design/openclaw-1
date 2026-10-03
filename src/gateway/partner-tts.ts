@@ -4,12 +4,18 @@ import * as path from "node:path";
 import { resolveOpenClawHome } from "./partner-store.js";
 
 /** Local VOICEVOX-compatible engines (AivisSpeech speaks the same HTTP API). */
-export type TtsEngineId = "voicevox" | "aivis";
+export type HttpTtsEngineId = "voicevox" | "aivis";
+/** "clone" speaks with a voice-studio recording through Qwen3-TTS (partner-voice-clone.ts). */
+export type TtsEngineId = HttpTtsEngineId | "clone";
+
+export const VOICE_PROJECT_ID = /^voice-[a-z0-9-]{8,60}$/;
 
 export type PartnerVoice = {
   engine: TtsEngineId;
-  /** Style id passed as `speaker` to the engine. */
+  /** Style id passed as `speaker` to the engine (unused by "clone"). */
   speakerId: number;
+  /** Voice-studio project whose recording "clone" imitates. */
+  voiceId?: string;
   /** Display label, e.g. "No.7（アナウンス）". */
   label?: string;
   speed?: number;
@@ -20,24 +26,25 @@ export type PartnerVoice = {
 export type TtsSpeakerStyle = {
   engine: TtsEngineId;
   speakerId: number;
+  voiceId?: string;
   speakerName: string;
   styleName: string;
 };
 
-const ENGINES: Record<TtsEngineId, { port: number; dir: string; name: string }> = {
+const ENGINES: Record<HttpTtsEngineId, { port: number; dir: string; name: string }> = {
   voicevox: { port: 50021, dir: "voicevox", name: "VOICEVOX" },
   aivis: { port: 10101, dir: "aivis", name: "AivisSpeech" },
 };
 
 const MAX_TEXT_CHARS = 400;
 const ENGINE_READY_TIMEOUT_MS = 180_000;
-const starting = new Map<TtsEngineId, Promise<void>>();
+const starting = new Map<HttpTtsEngineId, Promise<void>>();
 
-function engineUrl(engine: TtsEngineId): string {
+function engineUrl(engine: HttpTtsEngineId): string {
   return `http://127.0.0.1:${ENGINES[engine].port}`;
 }
 
-async function isEngineReady(engine: TtsEngineId): Promise<boolean> {
+async function isEngineReady(engine: HttpTtsEngineId): Promise<boolean> {
   try {
     const res = await fetch(`${engineUrl(engine)}/version`, { signal: AbortSignal.timeout(3_000) });
     return res.ok;
@@ -64,7 +71,7 @@ async function findRunExe(dir: string, depth = 3): Promise<string | undefined> {
 }
 
 /** Starts the engine on demand (detached, CPU) and waits until it answers. */
-export async function ensureTtsEngine(engine: TtsEngineId): Promise<void> {
+export async function ensureTtsEngine(engine: HttpTtsEngineId): Promise<void> {
   if (await isEngineReady(engine)) return;
   const pending = starting.get(engine);
   if (pending) return await pending;
@@ -99,7 +106,7 @@ export async function ensureTtsEngine(engine: TtsEngineId): Promise<void> {
 /** Every style of every installed engine, for the app's voice picker. */
 export async function listTtsSpeakers(): Promise<TtsSpeakerStyle[]> {
   const out: TtsSpeakerStyle[] = [];
-  for (const engine of Object.keys(ENGINES) as TtsEngineId[]) {
+  for (const engine of Object.keys(ENGINES) as HttpTtsEngineId[]) {
     try {
       await ensureTtsEngine(engine);
       const res = await fetch(`${engineUrl(engine)}/speakers`, {
@@ -141,6 +148,8 @@ export function prepareSpeechText(text: string): string {
 export async function synthesizeSpeech(voice: PartnerVoice, text: string): Promise<Buffer> {
   const speech = prepareSpeechText(text);
   if (!speech) throw new Error("Nothing to read aloud");
+  if (voice.engine === "clone")
+    throw new Error("Clone voices are synthesized by partner-voice-clone");
   await ensureTtsEngine(voice.engine);
   const base = engineUrl(voice.engine);
   const queryRes = await fetch(
@@ -166,12 +175,16 @@ export function sanitizePartnerVoice(raw: unknown): PartnerVoice | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const v = raw as Record<string, unknown>;
   if (
-    (v.engine !== "voicevox" && v.engine !== "aivis") ||
+    (v.engine !== "voicevox" && v.engine !== "aivis" && v.engine !== "clone") ||
     typeof v.speakerId !== "number" ||
     !Number.isInteger(v.speakerId)
   ) {
     return undefined;
   }
+  // A clone voice must point at a voice-studio project (recorded with the speaker's consent).
+  const voiceId =
+    typeof v.voiceId === "string" && VOICE_PROJECT_ID.test(v.voiceId) ? v.voiceId : undefined;
+  if (v.engine === "clone" && !voiceId) return undefined;
   const clamp = (value: unknown, min: number, max: number) =>
     typeof value === "number" && Number.isFinite(value)
       ? Math.min(max, Math.max(min, value))
@@ -179,6 +192,7 @@ export function sanitizePartnerVoice(raw: unknown): PartnerVoice | undefined {
   const voice: PartnerVoice = {
     engine: v.engine,
     speakerId: v.speakerId,
+    voiceId: v.engine === "clone" ? voiceId : undefined,
     label: typeof v.label === "string" ? v.label.slice(0, 80) : undefined,
     speed: clamp(v.speed, 0.5, 2),
     pitch: clamp(v.pitch, -0.15, 0.15),

@@ -23,6 +23,20 @@ describe("partner TTS", () => {
     expect(sanitizePartnerVoice({ engine: "aivis", speakerId: 1.5 })).toBeUndefined();
   });
 
+  it("keeps a clone voice only when it points at a voice-studio recording", () => {
+    expect(
+      sanitizePartnerVoice({ engine: "clone", speakerId: 0, voiceId: "voice-0123456789abcdef" }),
+    ).toEqual({ engine: "clone", speakerId: 0, voiceId: "voice-0123456789abcdef" });
+    expect(sanitizePartnerVoice({ engine: "clone", speakerId: 0 })).toBeUndefined();
+    expect(
+      sanitizePartnerVoice({ engine: "clone", speakerId: 0, voiceId: "../../secret" }),
+    ).toBeUndefined();
+    // Engine voices never carry a recording id.
+    expect(
+      sanitizePartnerVoice({ engine: "aivis", speakerId: 2, voiceId: "voice-0123456789abcdef" }),
+    ).toEqual({ engine: "aivis", speakerId: 2 });
+  });
+
   it("applies the voice tuning to the audio query", async () => {
     const calls: Array<{ url: string; body?: string }> = [];
     vi.stubGlobal(
