@@ -1,4 +1,4 @@
-import { execFile, execSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { OllamaManager } from "../../../extensions/ollama/src/ollama-manager.js";
@@ -599,32 +599,9 @@ export const ollamaHandlers: GatewayRequestHandlers = {
           ? localModelPath(localModel)
           : (BONSAI_MODEL_FILES[cleanModel.toLowerCase()] ?? DEFAULT_BONSAI_MODEL_FILE);
         const scriptPath = resolveStartModelScriptPath();
-        const isPQ2 = targetFile.includes("PQ2");
 
-        // PQ2モデルの場合: VRAM確保のため不要プロセスを停止
-        if (isPQ2) {
-          console.log("[Gateway] PQ2モデル切替: VRAMを確保するため不要プロセスを停止中...");
-          const processesToKill = [
-            "chrome",
-            "msedge",
-            "msedgewebview2",
-            "steamwebhelper",
-            "steam",
-            "nearby_share",
-          ];
-          for (const proc of processesToKill) {
-            try {
-              execSync(`taskkill /IM "${proc}.exe" /F 2>nul`, { stdio: "ignore" });
-              console.log(`[Gateway] 停止: ${proc}.exe`);
-            } catch {
-              // プロセスが存在しない場合は無視
-            }
-          }
-          // 少し待ってVRAMが解放されるのを待つ
-          await new Promise<void>((r) => setTimeout(r, 2000));
-          console.log("[Gateway] VRAM確保完了");
-        }
-
+        // PQ2 no longer closes the user's browsers to make room: start_model.ps1 caps it at a
+        // 16K context, which fits 8 GB with them open (30 tok/s, measured 2026-10-03).
         // PTQ1 and PQ2 share start_model.ps1: it stops the old llama-server, starts the
         // single model detached, and waits for the port. Arguments go through execFile
         // (no shell), and every value is validated or comes from the tables above.
