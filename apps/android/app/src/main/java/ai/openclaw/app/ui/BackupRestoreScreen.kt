@@ -269,6 +269,8 @@ internal fun BackupRestoreScreen(
           }
         }
 
+        item { FullBackupPanel(viewModel) }
+
         // 双方向相互同期 (Auto Sync) パネル
         item {
           ClawPanel {

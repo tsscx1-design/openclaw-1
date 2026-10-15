@@ -41,7 +41,7 @@ export const backupHandlers: GatewayRequestHandlers = {
 
       respond(true, backup, undefined);
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(e)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
     }
   },
 
@@ -105,7 +105,7 @@ export const backupHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INTERNAL_ERROR, `Failed to restore config: ${String(e)}`),
+        errorShape(ErrorCodes.UNAVAILABLE, `Failed to restore config: ${String(e)}`),
       );
     }
   },
