@@ -10,8 +10,9 @@ import {
   swapFrameCount,
   swapPassArgs,
 } from "../face-swap.js";
-import { jobs, stopImageWorker } from "../media-studio.js";
+import { jobs } from "../media-studio.js";
 import { acquireGpu } from "./gpu-lease.js";
+import { stopImageWorker } from "./image.js";
 import { exists, outDir, resultPath } from "./paths.js";
 import { markStage, runTool } from "./runner.js";
 import type { MediaJob, MediaOptions } from "./types.js";
