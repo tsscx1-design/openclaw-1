@@ -17,8 +17,8 @@ import {
 } from "../group-chat-model.js";
 import { parseJsonObject } from "../llm-json.js";
 import { affectNote, applyStateChange, extractStateLine, loadAffect } from "../partner-affect.js";
-import { researchIoFromTools } from "../partner-creation.js";
 import { addKnowledge, fetchSourceText, knowledgeNoteFor } from "../partner-knowledge.js";
+import { researchIoFromTools } from "../partner-research-io.js";
 import {
   parsePartnerSheet,
   REAL_PERSON_RULES,

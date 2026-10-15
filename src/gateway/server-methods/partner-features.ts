@@ -39,11 +39,7 @@ import {
   visionReady,
   type AlbumItem,
 } from "../partner-album.js";
-import {
-  createPartnerFromResearch,
-  researchIoFromTools,
-  sanitizePartnerCreationRequest,
-} from "../partner-creation.js";
+import { createPartnerFromResearch, sanitizePartnerCreationRequest } from "../partner-creation.js";
 import {
   getTodaysFortune,
   loadDailySettings,
@@ -66,6 +62,7 @@ import {
   loadOrBuildDailyBrief,
   startVoiceTraining,
 } from "../partner-proactive.js";
+import { researchIoFromTools } from "../partner-research-io.js";
 import { clip, generatePartnerSheet, workerSheetCompletion } from "../partner-sheet-generator.js";
 import { buildPartnerSheetMarkdown, parsePartnerSheet } from "../partner-sheet-schema.js";
 import {

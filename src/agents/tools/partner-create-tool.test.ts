@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { parseJsonObject } from "../../gateway/llm-json.js";
-import { unwrapExternalText } from "../../gateway/partner-creation.js";
+import { unwrapExternalText } from "../../gateway/partner-research-io.js";
 import type { ResearchIO } from "../../gateway/partner-research.js";
 import {
   digestResearch,

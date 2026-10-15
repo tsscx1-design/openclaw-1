@@ -1,9 +1,9 @@
 import { Type } from "typebox";
 import {
   createPartnerFromResearch,
-  researchIoFromTools,
   sanitizePartnerCreationRequest,
 } from "../../gateway/partner-creation.js";
+import { researchIoFromTools } from "../../gateway/partner-research-io.js";
 import type { ResearchIO } from "../../gateway/partner-research.js";
 import type { SheetCompletion } from "../../gateway/partner-sheet-generator.js";
 import type { savePartnerProfileWithSheet } from "../../gateway/server-methods/partners.js";

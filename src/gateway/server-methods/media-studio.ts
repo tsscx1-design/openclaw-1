@@ -253,7 +253,7 @@ import {
 import { motionCatalog } from "../motion-catalog.js";
 import { MOTION_MINUTES, MOTION_OPTION_IDS, MOTION_TEMPLATE_IDS } from "../motion-comic.js";
 import { motionExtrasFromParams, voiceDramaFromParams } from "../motion-extras.js";
-import { researchIoFromTools } from "../partner-creation.js";
+import { researchIoFromTools } from "../partner-research-io.js";
 import { readJsonFile, resolveOpenClawHome } from "../partner-store.js";
 import {
   analyzePhoto,
