@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { negativeTags } from "./blocked-terms-config.js";
 import { resolveOpenClawHome } from "./partner-store.js";
 
 // Local avatar image generation: stable-diffusion.cpp (CPU build) + an anime SD1.5 checkpoint.
@@ -18,7 +19,7 @@ const MAX_PROMPT_CHARS = 600;
 const QUALITY_TAGS =
   "masterpiece, best quality, anime style, 1 character, upper body, looking at viewer, simple background";
 const NEGATIVE_PROMPT =
-  "nsfw, nude, lowres, bad anatomy, bad hands, extra fingers, missing fingers, text, watermark, signature, username, blurry, worst quality, low quality, jpeg artifacts, realistic photo, multiple people";
+  "lowres, bad anatomy, bad hands, extra fingers, missing fingers, text, watermark, signature, username, blurry, worst quality, low quality, jpeg artifacts, realistic photo, multiple people";
 
 export type AvatarJobStatus = "queued" | "running" | "done" | "error";
 
@@ -94,7 +95,8 @@ function runSd(job: AvatarJob, outFile: string): Promise<void> {
       "-p",
       `${QUALITY_TAGS}, ${job.prompt}`,
       "-n",
-      NEGATIVE_PROMPT,
+      // The fixed tags, and the negative tags of the picture in dist/blocked-terms.json.
+      [NEGATIVE_PROMPT, negativeTags("imageNegative")].filter(Boolean).join(", "),
       "-W",
       "512",
       "-H",

@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { setBlockedTermsFileForTesting } from "./blocked-terms-config.js";
+import { installBlockedTerms } from "./blocked-terms-test-support.js";
 import {
   assertAllowedRequest,
+  comicSheetViewOf,
   isSexualRequest,
   sanitizeH3Prompt,
   sanitizeLyrics,
@@ -10,17 +15,52 @@ import {
   wan2gpFrames,
 } from "./media-studio.js";
 
+let restoreBlockedTerms: () => void = () => undefined;
+beforeAll(() => {
+  restoreBlockedTerms = installBlockedTerms();
+});
+afterAll(() => {
+  restoreBlockedTerms();
+});
+
 describe("assertAllowedRequest", () => {
-  it("refuses sexual requests that involve minors, in Japanese or English", () => {
-    expect(() => assertAllowedRequest("小学生 の ヌード")).toThrow();
-    expect(() => assertAllowedRequest("nude", "loli, 1girl")).toThrow();
-    expect(() => assertAllowedRequest("child in lingerie")).toThrow();
+  it("refuses a request that holds a word of the blocked-terms file, in Japanese or English", () => {
+    expect(() => assertAllowedRequest("小学生 の ヌード")).toThrow("禁止設定");
+    expect(() => assertAllowedRequest("nude", "loli, 1girl")).toThrow("禁止設定");
+    expect(() => assertAllowedRequest("child in lingerie")).toThrow("禁止設定");
   });
 
-  it("allows adult sexual requests and non-sexual requests about children", () => {
+  it("refuses a blocked word even when nothing in the request is sexual", () => {
+    expect(() => assertAllowedRequest("学生が教室で勉強している")).toThrow("「学生」");
+  });
+
+  it("allows requests without a blocked word, adult or not", () => {
     expect(() => assertAllowedRequest("大人の女性 ヌード")).not.toThrow();
-    expect(() => assertAllowedRequest("子供が公園で遊んでいる")).not.toThrow();
     expect(() => assertAllowedRequest("cat ears maid serving coffee")).not.toThrow();
+  });
+
+  it("blocks nothing while the file is missing, and has no built-in list to fall back on", () => {
+    restoreBlockedTerms();
+    setBlockedTermsFileForTesting(
+      path.join(os.tmpdir(), "missing-blocked-terms-dir", "blocked-terms.json"),
+    );
+    try {
+      expect(() => assertAllowedRequest("学生 loli 小学生")).not.toThrow();
+    } finally {
+      setBlockedTermsFileForTesting(undefined);
+      restoreBlockedTerms = installBlockedTerms();
+    }
+  });
+});
+
+describe("comicSheetViewOf", () => {
+  it("passes the view the app names, and maps the old turnaround flag to the three-view", () => {
+    expect(comicSheetViewOf("three_view")).toBe("three_view");
+    expect(comicSheetViewOf("360")).toBe("360");
+    expect(comicSheetViewOf("front", true)).toBe("front");
+    expect(comicSheetViewOf(undefined, true)).toBe("three_view");
+    expect(comicSheetViewOf(undefined)).toBe("front");
+    expect(comicSheetViewOf("unknown")).toBe("front");
   });
 });
 
@@ -122,5 +162,74 @@ describe("sanitizeH3Prompt", () => {
     expect(sanitizeH3Prompt("A woman waves.")).toBe(
       "integrated_multimodal_description: [Shot 1] A woman waves.",
     );
+  });
+});
+
+describe("estimateMediaJob", () => {
+  it("uses typical times until a job with the same settings has finished", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const { vi } = await import("vitest");
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-estimate-"));
+    vi.stubEnv("OPENCLAW_HOME", home);
+    try {
+      const { estimateMediaJob } = await import("./media-studio.js");
+      // Nothing ran yet: typical drawing time plus the chat-model hand-off.
+      const image = await estimateMediaJob("image", { imageModel: "wai" });
+      expect(image).toEqual({ jobSec: 90, waitSec: 0, totalSec: 90, samples: 0 });
+      // A 5 s long-video clip from text: 150 s per clip second, a still first, smoothing.
+      const video = await estimateMediaJob("video", {
+        engine: "long",
+        durationSec: 5,
+        smooth: true,
+      });
+      expect(video.jobSec).toBe(150 * 5 + 30 + 60 + 60);
+
+      const out = path.join(home, "media", "out");
+      await fs.mkdir(out, { recursive: true });
+      for (const [id, durationSec] of [
+        ["aaaaaaaaaaa1", 40],
+        ["aaaaaaaaaaa2", 50],
+        ["aaaaaaaaaaa3", 300],
+      ] as const) {
+        await fs.writeFile(
+          path.join(out, `${id}.json`),
+          JSON.stringify({
+            id,
+            kind: "image",
+            status: "done",
+            request: "x",
+            createdAt: Number(id.slice(-1)),
+            durationSec,
+            options: { imageModel: "wai" },
+          }),
+        );
+      }
+      // Real results of the same settings replace the typical value (median, start-up included).
+      expect(await estimateMediaJob("image", { imageModel: "wai" })).toEqual({
+        jobSec: 50,
+        waitSec: 0,
+        totalSec: 50,
+        samples: 3,
+      });
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("multiPhotoPrompt", () => {
+  it("blends photos, or takes one part from each", async () => {
+    const { multiPhotoPrompt } = await import("./media-studio.js");
+    expect(multiPhotoPrompt("anime", "blend", [], 3)).toContain(
+      "blending the people in the 3 reference pictures",
+    );
+    const roles = multiPhotoPrompt("photo", "roles", ["顔", "髪", "服"], 3);
+    expect(roles).toContain("reference picture 1 only for the face and skin");
+    expect(roles).toContain("reference picture 2 only for the hair");
+    expect(roles).toContain("reference picture 3 only for the clothes");
+    expect(roles).toContain("realistic photograph");
   });
 });
