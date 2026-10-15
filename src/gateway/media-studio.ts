@@ -63,15 +63,7 @@ import {
   speakerPositions,
   type StagePosition,
 } from "./comic-series.js";
-import {
-  FACEFUSION_DIR,
-  FACEFUSION_PYTHON,
-  faceFusionPath,
-  probeMedia,
-  resolveInputFile,
-  swapFrameCount,
-  swapPassArgs,
-} from "./face-swap.js";
+import { FACEFUSION_PYTHON, probeMedia } from "./face-swap.js";
 import { type GenStyle, readGenStyle } from "./gen-style.js";
 import { enterGroupChatMode } from "./group-chat-model.js";
 import { irodoriInstalled, stopIrodoriWorker, synthesizeIrodori } from "./irodori-tts.js";
@@ -101,7 +93,6 @@ import {
   mediaProcessEnv,
   resolveGpuMode,
 } from "./media-gpu.js";
-import type { MediaQualityMode, MediaVoiceTimelineCue } from "./media-production-controls.js";
 import {
   DMD2_LORA,
   IMAGE_MODEL,
@@ -110,9 +101,6 @@ import {
   KEEP_FAILED,
   MAX_QUEUE,
   MEDIA_MODEL_DIR,
-  MUSIC_DIT,
-  MUSIC_LM,
-  MUSIC_MODEL_DIR,
   REMIX_HIGH,
   REMIX_LOW,
   RIFE_SCRIPT,
@@ -128,6 +116,7 @@ import {
   videoNegative,
 } from "./media/config.js";
 import { COMFY_PYTHON_PATH, defaultJobSec, REALESRGAN_EXE } from "./media/estimates.js";
+import { resolveSwapTarget, runFaceSwapJob } from "./media/faceswap.js";
 import {
   acquireGpu,
   latestTrainingState,
@@ -137,7 +126,9 @@ import {
   stopCpuWorkers,
   trainingDatasetCount,
 } from "./media/gpu-lease.js";
-import { aceBin, exists, outDir, pauseFlag, resultPath, sdCli } from "./media/paths.js";
+import { runMusicJob } from "./media/music.js";
+import { exists, outDir, pauseFlag, resultPath, sdCli } from "./media/paths.js";
+import { runQualityPass } from "./media/quality.js";
 import {
   activeChildren,
   killProcessTree,
@@ -158,7 +149,6 @@ import {
   toAudioVideoPrompt,
   toH3Prompt,
   toMotionPrompt,
-  toMusicCaption,
 } from "./media/text.js";
 import type {
   ImageModel,
@@ -170,6 +160,7 @@ import type {
   VideoEngine,
   WanImageModel,
 } from "./media/types.js";
+import { runVoiceJob, sanitizeVoiceScript, VOICE_FFMPEG } from "./media/voice-drama.js";
 import { adultLead, adultSentence } from "./minor-safeguards.js";
 import { isStoreModelId, storeSpecOf } from "./model-store.js";
 import { renderModel3d } from "./model3d.js";
@@ -193,7 +184,6 @@ import {
   phasesInFlow,
   sfxForCut,
   talkNote,
-  type VoiceDrama,
   voiceStyleNote,
 } from "./motion-extras.js";
 import { referenceClip } from "./partner-voice-clone.js";
@@ -236,6 +226,8 @@ export {
   selectBgmPrompt,
 } from "./media/estimates.js";
 export { latestTrainingState, trainingDatasetCount } from "./media/gpu-lease.js";
+export { sanitizeLyrics } from "./media/music.js";
+export { sanitizeVoiceScript } from "./media/voice-drama.js";
 
 // Local image / video / music generation on the RTX 4060 (8 GB).
 // The main chat LLM holds almost all VRAM, so a job stops it (the watchdog pause flag keeps it
@@ -336,7 +328,7 @@ function startImageWorker(index = 0): Promise<void> {
 }
 
 /** Stops one worker, or (no argument) every worker. */
-function stopImageWorker(only?: ImageWorkerSlot): void {
+export function stopImageWorker(only?: ImageWorkerSlot): void {
   for (const slot of only ? [only] : imageSlots) {
     const child = slot.child;
     slot.child = undefined;
@@ -782,398 +774,6 @@ async function runImageJob(job: MediaJob): Promise<void> {
   await renderImage(job, tags, isSexualRequest(`${job.request} ${tags}`), file);
   job.file = file;
   job.mime = "image/png";
-}
-
-const TIMELINE_SFX: Record<"thrust" | "spank" | "wet", string> = {
-  thrust: "D:\\media-tools\\motion-comic\\sfx\\synth\\thrust_slow.wav",
-  spank: "D:\\media-tools\\motion-comic\\sfx\\synth\\spank.wav",
-  wet: "D:\\media-tools\\motion-comic\\sfx\\synth\\wet_slow.wav",
-};
-
-const VOICE_FFMPEG = "D:\\media-tools\\Wan2GP\\ffmpeg_bins\\ffmpeg.exe";
-
-const VOICE_MAX_LINES = 40;
-
-/** A script for Irodori: printable text with its emojis and line breaks kept. */
-export function sanitizeVoiceScript(raw: string): string {
-  return raw
-    .replace(/\r\n?/g, "\n")
-    .replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, "")
-    .split("\n")
-    .map((line) => line.replace(/\s+/g, " ").trim())
-    .filter(Boolean)
-    .slice(0, VOICE_MAX_LINES)
-    .join("\n")
-    .slice(0, 4_000);
-}
-
-/**
- * A voice line or a short script with Irodori-TTS: each line (Irodori speaks up to ~30 s at a
- * time) in the chosen voice, joined with short pauses. The large model takes the GPU like any
- * media job; the small one is quick but plainer.
- */
-const DRAMA_SYSTEM = `あなたは成人向けの音声ドラマ（ASMRのような、耳元で聞く物語）の脚本家。お題から、1人の女性が聞き手（あなた）に語りかけるセリフを、順番に書く。
-出力はJSONオブジェクト1つだけ（説明や\`\`\`は書かない）: {"lines":[{"text":"セリフ","pause":1.2}]}
-- text は1つ60字以内の日本語。行ごとの演技を角括弧で付ける: [囁き] [吐息:弱] [喘ぎ:強] [荒い息] [照れ] [甘え] [懇願] [息をのむ] [水音] [間] [ゆっくり] [悲鳴:強] など。強さは 弱・中・強。絵文字は書かない（システムが変換する）。
-- pause はその行のあとの無音の秒数（0.3〜6）。ゆっくりな場面は長く、高まる場面は短く。
-- 全体は、静かな導入 → 少しずつ距離が近づく → 高まり → 絶頂 → 余韻 の流れで、与えられた範囲の分だけ書く。同じセリフを繰り返さない。
-- 聞き手を「あなた」と呼び、耳元で語るような口調にする。名前・口調はお題に従う。`;
-
-function parseDramaLines(reply: string): Array<{ text: string; pause: number }> {
-  const data = firstJsonObject(reply);
-  const rows = Array.isArray(data.lines) ? (data.lines as Array<Record<string, unknown>>) : [];
-  const out = rows
-    .map((row) => ({
-      text: String(row.text ?? "")
-        .replace(/[\r\n]+/g, " ")
-        .trim()
-        .slice(0, 120),
-      pause: Math.min(6, Math.max(0.3, Number(row.pause) || 1)),
-    }))
-    .filter((row) => row.text.length > 0);
-  if (out.length === 0) throw new Error("セリフがありません");
-  return out;
-}
-
-/** A long script in parts of about 24 lines, each part told what came before so the story goes on. */
-async function writeDramaScript(
-  job: MediaJob,
-  drama: VoiceDrama,
-): Promise<Array<{ text: string; pause: number }>> {
-  const request = await productionRequest(job);
-  const target = Math.min(210, Math.max(8, Math.round(drama.minutes * 7)));
-  const out: Array<{ text: string; pause: number }> = [];
-  while (out.length < target) {
-    if (job.cancelRequested) throw new Error("中止しました");
-    const want = Math.min(24, target - out.length);
-    const from = Math.round((out.length / target) * 100);
-    const to = Math.round(((out.length + want) / target) * 100);
-    const recap = out
-      .slice(-4)
-      .map((l) => l.text)
-      .join(" / ");
-    const user =
-      `お題: ${request}\n全体の ${from}% 〜 ${to}% の部分を、${want}行で書く。` +
-      (out.length === 0
-        ? "ここが物語の始まり。"
-        : `直前までの最後のセリフ: ${recap}\nその続きから、話を進める。`) +
-      (to >= 100 ? "ここで物語を終える（余韻と、おやすみの言葉まで）。" : "");
-    const part = await writeScript(
-      job,
-      `台本を書いています（${out.length}/${target}行）`,
-      DRAMA_SYSTEM,
-      user,
-      3_000,
-      parseDramaLines,
-    );
-    assertAllowedRequest(request, ...part.map((l) => l.text));
-    out.push(...part.slice(0, want));
-  }
-  return out;
-}
-
-async function runVoiceJob(job: MediaJob): Promise<void> {
-  const drama = job.options.voiceDrama;
-  const written = drama ? await writeDramaScript(job, drama) : undefined;
-  const timeline = job.options.voiceTimeline;
-  const lineCues = timeline?.filter(
-    (cue): cue is MediaVoiceTimelineCue & { kind: "line"; text: string } =>
-      cue.kind === "line" && Boolean(cue.text),
-  );
-  const lines = lineCues?.length
-    ? lineCues.map((cue) => cue.text)
-    : written
-      ? written.map((l) => l.text)
-      : job.request.split("\n").filter((line) => line.trim());
-  const pauses = written ? written.map((l) => l.pause) : [];
-  if (lines.length === 0) throw new Error("読み上げる文がありません");
-  const model = job.options.irodoriModel ?? (drama ? "fast" : "large");
-  const referenceWav = job.options.voiceId ? await referenceClip(job.options.voiceId) : undefined;
-  const caption = referenceWav ? undefined : job.options.voiceCaption;
-  if (!referenceWav && !caption)
-    throw new Error("声（声作りスタジオの声か、声の説明）を選んでください");
-  if (model === "large") {
-    markStage(job, "GPU を空けています");
-    await acquireGpu(job);
-    stopImageWorker();
-  }
-  const dir = path.join(outDir(), `${job.id}-voice`);
-  await fs.mkdir(dir, { recursive: true });
-  try {
-    const parts: string[] = [];
-    let seed: number | undefined;
-    // With two GPUs (the large model, several lines) two workers take lines side by side. The first line is
-    // made alone: a described voice (no recording) keeps its seed from it, so every line is the same person.
-    // If the second GPU cannot hold the model, its line goes back to the first worker and the second one stops.
-    const voiceDevices = generationCudaDevices(job.options.gpuMode === "fast");
-    const voiceDual = model === "large" && lines.length > 1 && voiceDevices.length >= 2;
-    const makeLine = async (index: number, lane: number) => {
-      markStage(
-        job,
-        `声を作っています（${index + 1}/${lines.length}行${index === 0 ? "・最初はモデルの読み込みがあります" : ""}）`,
-      );
-      const result = await synthesizeIrodori({
-        text: lines[index]!,
-        model,
-        caption,
-        referenceWav,
-        // The same seed keeps a described voice the same person from line to line.
-        ...(seed !== undefined && caption ? { seed } : {}),
-        ...(model === "large" ? { device: "cuda" as const } : {}),
-        ...(voiceDual ? { lane, cudaDevice: voiceDevices[lane] } : {}),
-      });
-      seed ??= result.seed;
-      const file = path.join(dir, `line-${String(index + 1).padStart(2, "0")}.wav`);
-      await fs.writeFile(file, result.audio);
-      parts[index] = file;
-    };
-    if (!voiceDual) {
-      for (const index of lines.keys()) {
-        if (job.cancelRequested) throw new Error("中止しました");
-        await makeLine(index, 0);
-      }
-    } else {
-      await makeLine(0, 0);
-      let nextLine = 1;
-      const runLane = async (lane: number): Promise<void> => {
-        for (;;) {
-          if (job.cancelRequested) throw new Error("中止しました");
-          const index = nextLine++;
-          if (index >= lines.length) return;
-          try {
-            await makeLine(index, lane);
-          } catch (error) {
-            if (lane === 0) throw error;
-            await makeLine(index, 0);
-            return;
-          }
-        }
-      };
-      await Promise.all([runLane(0), runLane(1)]);
-    }
-    markStage(job, "つないでいます");
-    const output = await resultPath(job, ".wav");
-    if (timeline?.length) {
-      const existingSfx = (
-        await Promise.all(
-          timeline
-            .filter(
-              (
-                cue,
-              ): cue is MediaVoiceTimelineCue & {
-                kind: "sfx";
-                sfx: "thrust" | "spank" | "wet";
-              } => cue.kind === "sfx" && Boolean(cue.sfx),
-            )
-            .map(async (cue) => ({
-              cue,
-              file: TIMELINE_SFX[cue.sfx],
-              exists: await exists(TIMELINE_SFX[cue.sfx]),
-            })),
-        )
-      ).filter((entry) => entry.exists);
-      const inputs = [...parts, ...existingSfx.map((entry) => entry.file)].flatMap((file) => [
-        "-i",
-        file,
-      ]);
-      const filters: string[] = [];
-      lineCues?.forEach((cue, index) => {
-        const delay = Math.round(cue.atSec * 1000);
-        filters.push(
-          `[${index}:a]aresample=48000,aformat=channel_layouts=mono,volume=${cue.volume},adelay=${delay}|${delay}[line${index}]`,
-        );
-      });
-      existingSfx.forEach(({ cue }, index) => {
-        const input = parts.length + index;
-        const delay = Math.round(cue.atSec * 1000);
-        filters.push(
-          `[${input}:a]aresample=48000,aformat=channel_layouts=mono,volume=${cue.volume},adelay=${delay}|${delay}[sfx${index}]`,
-        );
-      });
-      const labels = [
-        ...(lineCues ?? []).map((_, index) => `[line${index}]`),
-        ...existingSfx.map((_, index) => `[sfx${index}]`),
-      ];
-      await runTool(
-        VOICE_FFMPEG,
-        [
-          "-y",
-          "-loglevel",
-          "error",
-          ...inputs,
-          "-filter_complex",
-          `${filters.join(";")};${labels.join("")}amix=inputs=${labels.length}:duration=longest:normalize=0[out]`,
-          "-map",
-          "[out]",
-          output,
-        ],
-        { timeoutMs: 30 * 60_000 },
-      );
-    } else if (parts.length === 1) {
-      await fs.copyFile(parts[0] as string, output);
-    } else {
-      // Lines joined with 0.45 s of silence between them.
-      const inputs = parts.flatMap((p) => ["-i", p]);
-      const chain = parts
-        .map(
-          (_, i) =>
-            `[${i}:a]aresample=48000,aformat=channel_layouts=mono,apad=pad_dur=${pauses[i] ?? 0.45}[a${i}]`,
-        )
-        .join(";");
-      const concat = parts.map((_, i) => `[a${i}]`).join("");
-      await runTool(
-        VOICE_FFMPEG,
-        [
-          "-y",
-          "-loglevel",
-          "error",
-          ...inputs,
-          "-filter_complex",
-          `${chain};${concat}concat=n=${parts.length}:v=0:a=1[out]`,
-          "-map",
-          "[out]",
-          output,
-        ],
-        { timeoutMs: 5 * 60_000 },
-      );
-    }
-    if (drama && drama.ambience !== "none") {
-      // The background sound runs under the whole story, quietly.
-      markStage(job, "背景の音を重ねています");
-      const mixed = path.join(dir, "mixed.wav");
-      await runTool(
-        VOICE_FFMPEG,
-        [
-          "-y",
-          "-loglevel",
-          "error",
-          "-i",
-          output,
-          "-stream_loop",
-          "-1",
-          "-i",
-          path.join("D:\\media-tools\\motion-comic\\sfx\\ambience", `${drama.ambience}.wav`),
-          "-filter_complex",
-          "[0:a]aresample=48000,aformat=channel_layouts=mono[v];[1:a]aresample=48000,aformat=channel_layouts=mono,volume=0.2[amb];[v][amb]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[out]",
-          "-map",
-          "[out]",
-          mixed,
-        ],
-        { timeoutMs: 30 * 60_000 },
-      );
-      await fs.copyFile(mixed, output);
-    }
-    job.file = output;
-    job.mime = "audio/wav";
-  } finally {
-    // The large model holds ~7 GB of VRAM; give it back before the chat model returns.
-    if (model === "large") stopIrodoriWorker();
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
-
-/** The target file of a face swap job: "in:<file>" or a finished library job ("job:<id>"). */
-export function resolveSwapTarget(options: MediaOptions): string | undefined {
-  const target = options.swapTarget ?? "";
-  if (target.startsWith("in:")) return resolveInputFile(target);
-  const match = /^job:([a-f0-9]{6,32})$/.exec(target);
-  const job = match?.[1] ? jobs.get(match[1]) : undefined;
-  return job?.file;
-}
-
-/** One face picture for a swap: a library character's icon (or sheet), or a picture in the input folder. */
-async function swapSourceFile(source: { characterId?: string; inputId?: string }): Promise<string> {
-  if (source.inputId) {
-    const file = resolveInputFile(source.inputId);
-    if (file && (await exists(file))) return file;
-    throw new Error("顔の写真が見つかりません");
-  }
-  const character = await getCharacter(source.characterId ?? "");
-  if (!character) throw new Error("その登場人物はいません");
-  const icon = path.join(characterAssetDir(character.id), "icon.png");
-  if (await exists(icon)) return icon;
-  if (character.refImage && (await exists(character.refImage))) return character.refImage;
-  throw new Error(`${character.name} の顔の絵がありません。先に設定画を作ってください`);
-}
-
-/**
- * Face swap with FaceFusion: one pass per person (each pass takes the previous pass's film), then
- * the film is the job's result. The audio stays; the temp frames are JPEG and removed afterwards.
- */
-async function runFaceSwapJob(job: MediaJob): Promise<void> {
-  const options = job.options;
-  const target = resolveSwapTarget(options);
-  if (!target || !(await exists(target))) throw new Error("入れ替える動画か画像が見つかりません");
-  const sources = options.swapSources ?? [];
-  if (sources.length === 0) throw new Error("入れ替える顔がありません");
-  const probe = await probeMedia(target);
-  const frames = swapFrameCount(probe, options);
-  const total = Math.max(1, sources.length);
-  markStage(job, "GPU を空けています");
-  await acquireGpu(job);
-  stopImageWorker();
-  const work = path.join(outDir(), `${job.id}-swap`);
-  await fs.mkdir(work, { recursive: true });
-  const startFrame = Math.round((options.swapTrimStartSec ?? 0) * probe.fps);
-  const trimmed =
-    probe.kind === "video" &&
-    (options.swapTrimStartSec !== undefined || options.swapTrimEndSec !== undefined);
-  const referenceFrame = Math.round((options.swapReferenceSec ?? 0) * probe.fps);
-  const ext = probe.kind === "image" ? ".png" : ".mp4";
-  const env = { ...process.env, PYTHONUTF8: "1", PATH: await faceFusionPath(process.env.PATH) };
-  try {
-    let current = target;
-    for (const [index, source] of sources.entries()) {
-      if (job.cancelRequested) throw new Error("中止しました");
-      const output = path.join(work, `pass-${index + 1}${ext}`);
-      const args = swapPassArgs({
-        source: await swapSourceFile(source),
-        target: current,
-        output,
-        tempDir: path.join(work, "temp"),
-        quality: options.swapQuality ?? "standard",
-        enhancer: options.swapEnhancer === true,
-        position:
-          sources.length > 1 || source.position !== undefined
-            ? (source.position ?? index)
-            : undefined,
-        referenceFrame: index === 0 ? referenceFrame : Math.max(0, referenceFrame - startFrame),
-        // Only the first pass cuts the part out; later passes already work on it.
-        ...(trimmed && index === 0
-          ? {
-              trim: {
-                startFrame,
-                endFrame: startFrame + frames,
-              },
-            }
-          : {}),
-      });
-      const label = total > 1 ? `${index + 1}/${total}人目` : "";
-      markStage(job, `顔を入れ替えています${label ? `（${label}・準備中）` : "（準備中）"}`);
-      const passStart = Date.now();
-      await runTool(FACEFUSION_PYTHON, args, {
-        cwd: FACEFUSION_DIR,
-        env,
-        timeoutMs: 12 * 60 * 60_000,
-        onLine: (line) => {
-          const percent = /(\d{1,3})%\|/.exec(line)?.[1];
-          if (percent && /processing/i.test(line)) {
-            markStage(job, `顔を入れ替えています（${label ? `${label}・` : ""}${percent}%）`);
-          }
-        },
-      });
-      if (!(await exists(output))) throw new Error("入れ替えた結果のファイルができませんでした");
-      // Milliseconds per frame per pass, kept so the next estimate uses the real speed.
-      (job.timings ??= {}).spf = Math.round((Date.now() - passStart) / Math.max(1, frames));
-      current = output;
-    }
-    const finalFile = await resultPath(job, ext);
-    await fs.copyFile(current, finalFile);
-    job.file = finalFile;
-    job.mime = probe.kind === "image" ? "image/png" : "video/mp4";
-  } finally {
-    await fs.rm(work, { recursive: true, force: true }).catch(() => undefined);
-  }
 }
 
 /** Motion comic runner (key images, Wan 2.2 cuts, film) and its sound effects; outside the repo. */
@@ -2202,7 +1802,7 @@ async function askScriptWriter(
   return askGemma(system, user, maxTokens);
 }
 
-async function writeScript<T>(
+export async function writeScript<T>(
   job: MediaJob,
   stage: string,
   system: string,
@@ -4740,194 +4340,6 @@ async function runWan2gpVideo(
   await fs.rm(workDir, { recursive: true, force: true });
   job.file = file;
   job.mime = ext === ".webm" ? "video/webm" : ext === ".mkv" ? "video/x-matroska" : "video/mp4";
-}
-
-async function runMusicJob(job: MediaJob): Promise<void> {
-  markStage(job, "曲の説明を英語に変換しています");
-  const caption = await toMusicCaption(job.request);
-  const lyrics = job.options.instrumental
-    ? "[Instrumental]"
-    : sanitizeLyrics(job.options.lyrics ?? "");
-  assertAllowedRequest(job.request, caption, lyrics);
-  const workDir = path.join(outDir(), `${job.id}-work`);
-  await fs.mkdir(workDir, { recursive: true });
-  const request = path.join(workDir, "request.json");
-  await fs.writeFile(
-    request,
-    JSON.stringify({
-      caption,
-      lyrics,
-      duration: Math.min(240, Math.max(15, job.options.durationSec ?? 90)),
-      vocal_language: job.options.instrumental ? "unknown" : "ja",
-      inference_steps: 8,
-      shift: 3.0,
-      lm_model: MUSIC_LM,
-      synth_model: MUSIC_DIT,
-      output_format: "mp3",
-      mp3_bitrate: 192,
-    }),
-  );
-  markStage(job, "GPU を空けています");
-  await acquireGpu(job);
-  job.stage = lyrics ? "曲の構成を考えています" : "歌詞と曲の構成を考えています";
-  await runTool(aceBin("ace-lm"), ["--models", MUSIC_MODEL_DIR, "--request", request], {});
-  markStage(job, "音にしています");
-  await runTool(
-    aceBin("ace-synth"),
-    ["--models", MUSIC_MODEL_DIR, "--request", path.join(workDir, "request0.json")],
-    {},
-  );
-  const file = await resultPath(job, ".mp3");
-  await fs.rename(path.join(workDir, "request00.mp3"), file);
-  // Keep the generated lyrics with the result so the app can show them.
-  try {
-    const enriched = JSON.parse(
-      await fs.readFile(path.join(workDir, "request0.json"), "utf-8"),
-    ) as {
-      lyrics?: string;
-    };
-    job.options.lyrics = enriched.lyrics ?? lyrics;
-  } catch {
-    // Lyrics display is best-effort.
-  }
-  await fs.rm(workDir, { recursive: true, force: true });
-  job.file = file;
-  job.mime = "audio/mpeg";
-}
-
-/** Lyrics keep their line breaks and section tags like [Verse]. */
-export function sanitizeLyrics(raw: string): string {
-  return raw
-    .replace(/\r\n?/g, "\n")
-    .replace(
-      /[^\p{L}\p{N}\s\[\],.:;!?()'"_+\-/&\u30FC\u301C\uFF5E\u3001\u3002\u300C\u300D\u300E\u300F\uFF01\uFF1F]/gu,
-      "",
-    )
-    .trim()
-    .slice(0, 3_000);
-}
-
-async function improveImageFile(
-  job: MediaJob,
-  file: string,
-  mode: MediaQualityMode,
-): Promise<void> {
-  const temp = `${file}.quality.png`;
-  await upscaleWithSeedVr(
-    file,
-    temp,
-    { model: mode === "max" ? "7b" : "3b", resolution: mode === "max" ? 2048 : 1536 },
-    {
-      onStage: (stage) => markStage(job, stage),
-      isCancelled: () => job.cancelRequested === true,
-      cudaDevice: generationCudaDevice(job.options.gpuMode === "fast"),
-    },
-  );
-  await fs.copyFile(temp, file);
-  await fs.rm(temp, { force: true });
-}
-
-async function improveAudioFile(file: string): Promise<void> {
-  const ext = path.extname(file).toLowerCase();
-  const temp = `${file}.quality${ext || ".wav"}`;
-  await runTool(
-    VOICE_FFMPEG,
-    [
-      "-y",
-      "-loglevel",
-      "error",
-      "-i",
-      file,
-      "-af",
-      "loudnorm=I=-16:TP=-1.5:LRA=11",
-      ...(ext === ".mp3" ? ["-c:a", "libmp3lame", "-b:a", "192k"] : ["-c:a", "pcm_s16le"]),
-      temp,
-    ],
-    { timeoutMs: 30 * 60_000 },
-  );
-  await fs.copyFile(temp, file);
-  await fs.rm(temp, { force: true });
-}
-
-async function improveVideoFile(
-  job: MediaJob,
-  file: string,
-  mode: MediaQualityMode,
-): Promise<void> {
-  const temp = `${file}.quality.mp4`;
-  const videoFilter =
-    mode === "max"
-      ? "hqdn3d=1.2:1.2:6:6,unsharp=5:5:0.8:5:5:0"
-      : "hqdn3d=0.8:0.8:4:4,unsharp=5:5:0.45:5:5:0";
-  await runTool(
-    VOICE_FFMPEG,
-    [
-      "-y",
-      "-loglevel",
-      "error",
-      "-i",
-      file,
-      "-vf",
-      videoFilter,
-      "-c:v",
-      "libx264",
-      "-preset",
-      mode === "max" ? "slow" : "medium",
-      "-crf",
-      mode === "max" ? "17" : "19",
-      "-map",
-      "0:v:0",
-      "-map",
-      "0:a?",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "192k",
-      "-movflags",
-      "+faststart",
-      temp,
-    ],
-    { timeoutMs: 4 * 60 * 60_000 },
-  );
-  const finalFile = await resultPath(job, ".mp4");
-  await fs.copyFile(temp, finalFile);
-  await fs.rm(temp, { force: true });
-  if (file !== finalFile) await fs.rm(file, { force: true }).catch(() => undefined);
-  job.file = finalFile;
-  job.mime = "video/mp4";
-}
-
-/** Optional finishing pass shared by images, comics, video, motion, face swap, voice and music. */
-async function runQualityPass(job: MediaJob): Promise<void> {
-  const mode = job.options.qualityMode;
-  if (!mode || mode === "off") return;
-  markStage(job, "仕上がりを整えています");
-  try {
-    const imageFiles = job.files?.length
-      ? job.files
-      : job.file && job.mime?.startsWith("image/")
-        ? [job.file]
-        : [];
-    if (imageFiles.length > 0) {
-      for (const [index, file] of imageFiles.entries()) {
-        markStage(job, `画像を高画質化しています（${index + 1}/${imageFiles.length}）`);
-        await improveImageFile(job, file, mode);
-      }
-    } else if (job.file && job.mime?.startsWith("video/")) {
-      await improveVideoFile(job, job.file, mode);
-    } else if (job.file && job.mime?.startsWith("audio/")) {
-      await improveAudioFile(job.file);
-    } else {
-      throw new Error("仕上げ対象のファイルがありません");
-    }
-    job.quality = { mode, status: "done", note: "高画質仕上げ済み" };
-  } catch (error) {
-    job.quality = {
-      mode,
-      status: "warning",
-      note: `元の生成結果を保存しました。仕上げのみ失敗: ${String(error instanceof Error ? error.message : error).slice(0, 240)}`,
-    };
-  }
 }
 
 // ---------- Queue ----------
