@@ -82,6 +82,10 @@ data class PartnerItem(
   val persona: String,
   val modelId: String,
   val reasoningEffort: String,
+  /** キャラ図鑑のキャラID（連携時のみ設定） */
+  val sourceCharacterId: String = "",
+  /** お気に入り（キャラ図鑑と同期） */
+  val isFavorite: Boolean = false,
 )
 
 @Composable
@@ -91,6 +95,7 @@ internal fun PartnerManagementScreen(
   onStartGroupChat: () -> Unit = {},
   onOpenPartnerChat: (String) -> Unit = {},
   onOpenCharacterSheet: (String) -> Unit = {},
+  onOpenAudioStudio: () -> Unit = {},
 ) {
   BackHandler(onBack = onBack)
 
@@ -117,15 +122,23 @@ internal fun PartnerManagementScreen(
   var setTemperature by remember { mutableStateOf(0.6f) }
   var setProactive by remember { mutableStateOf(false) }
   var setTopics by remember { mutableStateOf("") }
+  var setNewsDigest by remember { mutableStateOf(false) }
+  var setStudioAssistant by remember { mutableStateOf(false) }
   var setVoicePitch by remember { mutableStateOf(1f) }
   var setVoiceRate by remember { mutableStateOf(1f) }
   // PC の声（VOICEVOX / AivisSpeech）。null ならスマホの読み上げ
   var setVoice by remember { mutableStateOf<JSONObject?>(null) }
-  var showVoicePicker by remember { mutableStateOf(false) }
-  var voiceSpeakers by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
-  var voicePickerStatus by remember { mutableStateOf("") }
 
   var mainPartnerId by remember { mutableStateOf<String?>(null) }
+  // 紐付けキャラ図鑑のスペック編集
+  var editingCharaId by remember { mutableStateOf("") }
+  var editingCharaName by remember { mutableStateOf("") }
+  var libraryCharaSummary by remember { mutableStateOf("") }
+  val specEditMap = remember { androidx.compose.runtime.snapshots.SnapshotStateMap<String, String>() }
+  var showSpecEditor by remember { mutableStateOf(false) }
+  var specSaveStatus by remember { mutableStateOf("") }
+  var partnerCustomFieldKey by remember { mutableStateOf("") }
+  var partnerCustomFieldValue by remember { mutableStateOf("") }
 
   val imagePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
     uri?.let {
@@ -200,7 +213,9 @@ internal fun PartnerManagementScreen(
               avatarUrl = p.optString("avatarUrl", ""),
               persona = p.optString("persona", ""),
               modelId = p.optString("modelId", "ternary-bonsai-2-27b"),
-              reasoningEffort = p.optString("reasoningEffort", "none")
+              reasoningEffort = p.optString("reasoningEffort", "none"),
+              sourceCharacterId = p.optString("sourceCharacterId", ""),
+              isFavorite = p.optBoolean("isFavorite", false),
             )
           )
         }
@@ -285,6 +300,8 @@ internal fun PartnerManagementScreen(
               .put("temperature", setTemperature.toDouble())
               .put("proactive", setProactive)
               .put("dailyTopics", topics)
+              .put("newsDigest", setNewsDigest)
+              .put("studioAssistant", setStudioAssistant)
               .put("voicePitch", setVoicePitch.toDouble())
               .put("voiceRate", setVoiceRate.toDouble())
               .put(
@@ -343,6 +360,8 @@ internal fun PartnerManagementScreen(
         setProactive = st.optBoolean("proactive", false)
         val topics = st.optJSONArray("dailyTopics") ?: JSONArray()
         setTopics = (0 until topics.length()).joinToString("、") { topics.optString(it) }
+        setNewsDigest = st.optBoolean("newsDigest", false)
+        setStudioAssistant = st.optBoolean("studioAssistant", false)
         setVoicePitch = st.optDouble("voicePitch", 1.0).toFloat()
         setVoiceRate = st.optDouble("voiceRate", 1.0).toFloat()
         setVoice = st.optJSONObject("voice")
@@ -355,6 +374,44 @@ internal fun PartnerManagementScreen(
     formModelId = partner.modelId
     formReasoningEffort = partner.reasoningEffort
     showEditDialog = true
+    // 紐付けキャラのスペックを取得
+    if (partner.sourceCharacterId.isNotBlank()) {
+      editingCharaId = partner.sourceCharacterId
+      coroutineScope.launch {
+        runCatching {
+          val res = JSONObject(viewModel.runGatewayRpc(GatewayMethod.ComicCharacterList, "{}"))
+          val arr = res.optJSONArray("characters")
+          if (arr != null) {
+            for (i in 0 until arr.length()) {
+              val chara = arr.getJSONObject(i)
+              if (chara.optString("id") == partner.sourceCharacterId) {
+                editingCharaName = chara.optString("name", partner.name)
+                // キャラ図鑑の設定の要約（パートナー管理に出す。チャットでも、この設定を読んで話す）
+                libraryCharaSummary = buildString {
+                  chara.optString("specText").takeIf { it.isNotBlank() }?.let { append(it.replace(" / ", "\n")) }
+                  chara.optString("profile").takeIf { it.isNotBlank() }?.let { if (isNotEmpty()) append("\n\n"); append("プロフィール：").append(it) }
+                  chara.optJSONObject("sheetValues")?.let { sv ->
+                    val lines = sv.keys().asSequence().map { k -> k to sv.optString(k) }.filter { it.second.isNotBlank() }.map { "${it.first}：${it.second}" }.toList()
+                    if (lines.isNotEmpty()) { if (isNotEmpty()) append("\n\n"); append(lines.joinToString("\n")) }
+                  }
+                }
+                specEditMap.clear()
+                val spec = chara.optJSONObject("spec")
+                if (spec != null) {
+                  spec.keys().forEach { k -> specEditMap[k] = spec.optString(k) }
+                }
+                break
+              }
+            }
+          }
+        }
+      }
+    } else {
+      editingCharaId = ""
+      editingCharaName = ""
+      libraryCharaSummary = ""
+      specEditMap.clear()
+    }
   }
 
   LaunchedEffect(Unit) {
@@ -473,17 +530,30 @@ internal fun PartnerManagementScreen(
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
-                      Text(
-                        text = partner.name,
-                        style = ClawTheme.type.section.copy(fontSize = 15.sp),
-                        color = ClawTheme.colors.text
-                      )
-                      Text(
-                        text = "モデル: ${partner.modelId}",
-                        style = ClawTheme.type.caption.copy(fontSize = 11.sp),
-                        color = ClawTheme.colors.textMuted
-                      )
-                    }
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                          if (partner.isFavorite) {
+                            Text("⭐", fontSize = 14.sp)
+                            Spacer(modifier = Modifier.width(4.dp))
+                          }
+                          Text(
+                            text = partner.name,
+                            style = ClawTheme.type.section.copy(fontSize = 15.sp),
+                            color = ClawTheme.colors.text
+                          )
+                        }
+                        Text(
+                          text = "\u30e2\u30c7\u30eb: ${partner.modelId}",
+                          style = ClawTheme.type.caption.copy(fontSize = 11.sp),
+                          color = ClawTheme.colors.textMuted
+                        )
+                        if (partner.sourceCharacterId.isNotBlank()) {
+                          Text(
+                            text = "\ud83d\udc91 \u30ad\u30e3\u30e9\u56f3\u9451\u3068\u9023\u643a\u4e2d",
+                            style = ClawTheme.type.captionSmall.copy(fontSize = 10.sp),
+                            color = ClawTheme.colors.primary
+                          )
+                        }
+}
                   }
                   Row {
                     ClawIconButton(
@@ -542,6 +612,20 @@ internal fun PartnerManagementScreen(
                   },
                   modifier = Modifier.fillMaxWidth()
                 )
+                // キャラ図鑑の設定（連携しているキャラのとき）。チャットでは、この設定も読んで話します
+                if (partner.sourceCharacterId.isNotBlank()) {
+                  ClawPanel(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                      Text(text = "📖 キャラ図鑑の設定（${editingCharaName.ifBlank { partner.name }}）", style = ClawTheme.type.caption, color = ClawTheme.colors.text)
+                      Text(
+                        text = libraryCharaSummary.ifBlank { "読み込んでいます…（または、設定がまだありません）" },
+                        style = ClawTheme.type.captionSmall,
+                        color = ClawTheme.colors.textMuted,
+                      )
+                      Text(text = "チャットでは、パートナーの設定に加えて、この図鑑の設定も読んで話します。直すときは、キャラ図鑑で。", style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textSubtle)
+                    }
+                  }
+                }
               }
             }
           }
@@ -549,81 +633,6 @@ internal fun PartnerManagementScreen(
       }
     }
 
-    // --- PCの声の選択（試聴つき） ---
-    if (showVoicePicker) {
-      val pid = editingPartnerId
-      AlertDialog(
-        onDismissRequest = { showVoicePicker = false; PartnerVoicePlayer.stop() },
-        title = { Text("声を選ぶ", style = ClawTheme.type.section, color = ClawTheme.colors.text) },
-        text = {
-          Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (voicePickerStatus.isNotBlank()) {
-              Text(voicePickerStatus, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-            }
-            ClawSecondaryButton(
-              text = "PCの声を使わない（スマホの声）",
-              onClick = { setVoice = null; showVoicePicker = false },
-              modifier = Modifier.fillMaxWidth(),
-            )
-            LazyColumn(modifier = Modifier.fillMaxWidth().height(380.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-              items(voiceSpeakers) { sp ->
-                val engine = sp.optString("engine")
-                val label = "${sp.optString("speakerName")}（${sp.optString("styleName")}）"
-                // Clone voices are identified by their voice-studio recording, not a style id.
-                val voiceId = sp.optString("voiceId")
-                val voice = JSONObject().put("engine", engine).put("speakerId", sp.optInt("speakerId")).put("label", label)
-                if (voiceId.isNotEmpty()) voice.put("voiceId", voiceId)
-                val selected =
-                  setVoice?.optString("engine") == engine &&
-                    setVoice?.optInt("speakerId") == sp.optInt("speakerId") &&
-                    setVoice?.optString("voiceId").orEmpty() == voiceId
-                Row(
-                  modifier =
-                    Modifier
-                      .fillMaxWidth()
-                      .clip(RoundedCornerShape(8.dp))
-                      .background(if (selected) ClawTheme.colors.primary.copy(alpha = 0.18f) else ClawTheme.colors.surfaceRaised)
-                      .padding(horizontal = 10.dp, vertical = 4.dp),
-                  verticalAlignment = Alignment.CenterVertically,
-                ) {
-                  if (engine == "clone") {
-                    VoiceIcon(sp.optString("iconBase64"), 36.dp)
-                    Spacer(modifier = Modifier.width(8.dp))
-                  }
-                  Column(modifier = Modifier.weight(1f)) {
-                    Text(label, style = ClawTheme.type.body.copy(fontSize = 14.sp), color = ClawTheme.colors.text)
-                    Text(
-                      when (engine) {
-                        "aivis" -> "AivisSpeech"
-                        "clone" -> "声まね（録音した声をまねる・約5秒で作成）"
-                        else -> "VOICEVOX"
-                      },
-                      style = ClawTheme.type.caption.copy(fontSize = 11.sp),
-                      color = ClawTheme.colors.textMuted,
-                    )
-                  }
-                  TextButton(onClick = {
-                    if (pid == null) return@TextButton
-                    voicePickerStatus = "「$label」を再生中…"
-                    coroutineScope.launch {
-                      voicePickerStatus =
-                        try {
-                          PartnerVoicePlayer.speak(context, viewModel, pid, "こんにちは。今日もよろしくお願いします。", voiceOverride = voice)
-                          ""
-                        } catch (e: Exception) {
-                          "試聴エラー: ${e.message}"
-                        }
-                    }
-                  }) { Text("▶ 試聴") }
-                  TextButton(onClick = { setVoice = voice; showVoicePicker = false; PartnerVoicePlayer.stop() }) { Text("選ぶ") }
-                }
-              }
-            }
-          }
-        },
-        confirmButton = { TextButton(onClick = { showVoicePicker = false; PartnerVoicePlayer.stop() }) { Text("閉じる") } },
-      )
-    }
 
     // --- 編集 / 作成ダイアログ ---
     if (showEditDialog) {
@@ -846,39 +855,42 @@ internal fun PartnerManagementScreen(
               }
               Text("毎朝調べてほしいテーマ（「、」区切り・最大5つ）", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
               ClawTextField(value = setTopics, onValueChange = { setTopics = it }, placeholder = "例: 天気、AIニュース、阪神タイガース", modifier = Modifier.fillMaxWidth())
-              Text(
-                "声の高さ: ${String.format(Locale.US, "%.1f", setVoicePitch)}　話す速さ: ${String.format(Locale.US, "%.1f", setVoiceRate)}",
-                style = ClawTheme.type.caption,
-                color = ClawTheme.colors.textMuted,
-              )
               Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
-                  Text("🎙 PCの声（VOICEVOX / AivisSpeech）", style = ClawTheme.type.body, color = ClawTheme.colors.text)
+                  Text("📰 調べた内容をニュースとして全部届ける", style = ClawTheme.type.body, color = ClawTheme.colors.text)
                   Text(
-                    text = setVoice?.optString("label")?.takeIf { it.isNotBlank() } ?: "未設定（スマホの声で読み上げ）",
-                    style = ClawTheme.type.caption.copy(fontSize = 12.sp),
+                    "朝のメッセージの下に、テーマごとの最新情報を出典つきでまとめます（オフだと話題を1つ触れるだけ）",
+                    style = ClawTheme.type.caption.copy(fontSize = 11.sp),
                     color = ClawTheme.colors.textMuted,
                   )
                 }
-                ClawSecondaryButton(
-                  text = "声を選ぶ",
-                  onClick = {
-                    showVoicePicker = true
-                    voicePickerStatus = "声の一覧を読み込み中…（初回はエンジンの起動に少しかかります）"
-                    coroutineScope.launch {
-                      try {
-                        val arr = JSONObject(viewModel.runGatewayRpc(GatewayMethod.PartnerTtsSpeakers, "{}", timeoutMs = 200_000)).optJSONArray("speakers") ?: JSONArray()
-                        voiceSpeakers = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
-                        voicePickerStatus = if (voiceSpeakers.isEmpty()) "声が見つかりません。PCでVOICEVOX/AivisSpeechを確認してください。" else ""
-                      } catch (e: Exception) {
-                        voicePickerStatus = "読み込みエラー: ${e.message}"
-                      }
-                    }
-                  },
-                )
+                Switch(checked = setNewsDigest, onCheckedChange = { setNewsDigest = it })
               }
-              Slider(value = setVoicePitch, onValueChange = { setVoicePitch = it }, valueRange = 0.5f..2f)
-              Slider(value = setVoiceRate, onValueChange = { setVoiceRate = it }, valueRange = 0.5f..2f)
+              Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                  Text("🎨 生成アシスタントにする", style = ClawTheme.type.body, color = ClawTheme.colors.text)
+                  Text(
+                    "このパートナーとの会話で画像・動画・音楽を作る、進み具合を聞く、止める、声の学習を始めることができます",
+                    style = ClawTheme.type.caption.copy(fontSize = 11.sp),
+                    color = ClawTheme.colors.textMuted,
+                  )
+                }
+                Switch(checked = setStudioAssistant, onCheckedChange = { setStudioAssistant = it })
+              }
+              // 声（PC の声・声まね・自作の声）と、高さ・速さは、「音声スタジオ」に移した
+              Text(
+                text = "🎙 声：" + (setVoice?.optString("label")?.takeIf { it.isNotBlank() } ?: "未設定（スマホの声で読み上げ）"),
+                style = ClawTheme.type.body,
+                color = ClawTheme.colors.text,
+              )
+              ClawSecondaryButton(
+                text = "🎙 音声スタジオを開く（声を選ぶ・高さ・速さ）",
+                onClick = {
+                  showEditDialog = false
+                  onOpenAudioStudio()
+                },
+                modifier = Modifier.fillMaxWidth(),
+              )
               Spacer(modifier = Modifier.height(4.dp))
               ClawSecondaryButton(
                 text = "📝 9大属性キャラクターシートを編集",
@@ -889,6 +901,126 @@ internal fun PartnerManagementScreen(
                 },
                 modifier = Modifier.fillMaxWidth()
               )
+              // ── キャラ図鑑のスペック（設定シート）直接編集 ──────────────
+              if (editingCharaId.isNotBlank()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                ClawSecondaryButton(
+                  text = if (showSpecEditor) "▲ キャラ設定シートを閉じる" else "📋 【${editingCharaName}】の設定シートを編集する",
+                  onClick = { showSpecEditor = !showSpecEditor },
+                  modifier = Modifier.fillMaxWidth(),
+                )
+                if (showSpecEditor) {
+                  Text(
+                    text = "キャラ図鑑「${editingCharaName}」の設定シート",
+                    style = ClawTheme.type.caption,
+                    color = ClawTheme.colors.primary,
+                  )
+                  SPEC_GROUPS.forEach { (group, fields) ->
+                    Text(text = group, style = ClawTheme.type.caption, color = ClawTheme.colors.text)
+                    fields.forEach { (key, label) ->
+                      ClawTextField(
+                        value = specEditMap[key].orEmpty(),
+                        onValueChange = { specEditMap[key] = it },
+                        placeholder = label,
+                        label = label,
+                        minLines = if (key in setOf("background", "relations", "adultLikes", "kinks", "breathPlay")) 2 else 1,
+                        modifier = Modifier.fillMaxWidth(),
+                      )
+                    }
+                  }
+                  // カスタム項目（既知キー以外）
+                  val knownKeys = SPEC_GROUPS.flatMap { it.second }.map { it.first }.toSet()
+                  val customKeys = specEditMap.keys.filter { it !in knownKeys && specEditMap[it]?.isNotBlank() == true }
+                  if (customKeys.isNotEmpty()) {
+                    Text(text = "+ 独自の追加項目", style = ClawTheme.type.caption, color = ClawTheme.colors.text)
+                    customKeys.forEach { key ->
+                      Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                      ) {
+                        ClawTextField(
+                          value = specEditMap[key].orEmpty(),
+                          onValueChange = { specEditMap[key] = it },
+                          label = key,
+                          placeholder = "内容",
+                          modifier = Modifier.weight(1f),
+                        )
+                        ClawIconButton(
+                          icon = Icons.Default.Delete,
+                          contentDescription = "削除",
+                          onClick = { specEditMap.remove(key) },
+                        )
+                      }
+                    }
+                  }
+                  // 手動追加フォーム
+                  if (partnerCustomFieldKey.isNotBlank()) {
+                    Text(text = "+ 新しい項目を追加", style = ClawTheme.type.caption, color = ClawTheme.colors.text)
+                    ClawTextField(
+                      value = partnerCustomFieldKey,
+                      onValueChange = { partnerCustomFieldKey = it },
+                      label = "項目名",
+                      placeholder = "例: 鼻ピアス・へそピアス・首絞め・特殊設定",
+                      modifier = Modifier.fillMaxWidth(),
+                    )
+                    ClawTextField(
+                      value = partnerCustomFieldValue,
+                      onValueChange = { partnerCustomFieldValue = it },
+                      label = "内容",
+                      placeholder = "内容を入力",
+                      modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                      ClawPrimaryButton(
+                        text = "追加",
+                        enabled = partnerCustomFieldKey.isNotBlank(),
+                        onClick = {
+                          val trimmedKey = partnerCustomFieldKey.trim()
+                          if (trimmedKey.isNotBlank()) {
+                            specEditMap[trimmedKey] = partnerCustomFieldValue.trim()
+                            partnerCustomFieldKey = ""
+                            partnerCustomFieldValue = ""
+                          }
+                        },
+                      )
+                      ClawSecondaryButton(
+                        text = "キャンセル",
+                        onClick = { partnerCustomFieldKey = ""; partnerCustomFieldValue = "" },
+                      )
+                    }
+                  } else {
+                    ClawSecondaryButton(
+                      text = "+ 項目を手動で追加",
+                      onClick = { partnerCustomFieldKey = " " },
+                      modifier = Modifier.fillMaxWidth(),
+                    )
+                  }
+                  // 設定シートの保存ボタン
+                  if (specSaveStatus.isNotBlank()) {
+                    Text(text = specSaveStatus, style = ClawTheme.type.caption, color = ClawTheme.colors.primary)
+                  }
+                  ClawPrimaryButton(
+                    text = "キャラの設定シートを保存",
+                    onClick = {
+                      val charaId = editingCharaId
+                      if (charaId.isBlank()) return@ClawPrimaryButton
+                      coroutineScope.launch {
+                        runCatching {
+                          val spec = JSONObject()
+                          specEditMap.forEach { (k, v) -> if (v.isNotBlank()) spec.put(k, v.trim()) }
+                          viewModel.runGatewayRpc(
+                            GatewayMethod.ComicCharacterUpdate,
+                            JSONObject().put("characterId", charaId).put("spec", spec).toString(),
+                          )
+                          specSaveStatus = "保存しました！"
+                        }.onFailure { specSaveStatus = "保存エラー: ${it.message}" }
+                      }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                  )
+                }
+              }
             }
           }
         },

@@ -10,7 +10,14 @@ import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.PartnerAvatar
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.Base64
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.Image
+import java.io.ByteArrayOutputStream
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -18,6 +25,8 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -131,6 +140,8 @@ private fun friendlyErrorHint(action: String, msg: String): String {
       "⏰ ${action}がタイムアウトしました。PCとの接続を確認して再試行してください。"
     msg.contains("refused") || msg.contains("connect") || msg.contains("unreachable") ->
       "📡 PCに接続できません。OpenClawが起動しているか確認してください。"
+    msg.contains("no pc voice") ->
+      "🔇 このパートナーには、声がまだ設定されていません。「声を作る」で声を選ぶか、読み上げを「読まない」にしてください。"
     msg.contains("abort") || msg.contains("cancel") ->
       "🔄 ${action}が中断されました。もう一度お試しください。"
     else ->
@@ -151,11 +162,16 @@ internal fun PartnerChatScreen(
   onOpenDream: () -> Unit = {},
   onOpenMood: () -> Unit = {},
   onOpenDiary: () -> Unit = {},
+  onOpenKnowledge: () -> Unit = {},
 ) {
   BackHandler(onBack = onBack)
 
   val coroutineScope = rememberCoroutineScope()
   val partnerId by viewModel.activePartnerId.collectAsState()
+  androidx.compose.runtime.LaunchedEffect(partnerId) {
+    AffectBus.partnerId = partnerId.orEmpty()
+    AffectBus.refresh(viewModel)
+  }
 
   // H-4 修正: 送信ジョブを保持し、Composable破棄時にキャンセル
   var sendJob by remember { mutableStateOf<Job?>(null) }
@@ -168,12 +184,19 @@ internal fun PartnerChatScreen(
 
   var partnerName by remember { mutableStateOf("AIパートナー") }
   var partnerAvatarUrl by remember { mutableStateOf("") }
+  // キャラ図鑑のキャラとしてチャットしているときの、図鑑側のID（アバターの絵を取りに行く）
+  var partnerSourceCharacterId by remember { mutableStateOf("") }
+  val foldContext = androidx.compose.ui.platform.LocalContext.current
   var partnerPersona by remember { mutableStateOf("") }
   var partnerModel by remember { mutableStateOf("") }
   var messages by remember { mutableStateOf<List<PartnerSingleChatMessage>>(emptyList()) }
   // C-2 修正: 入力テキストはrememberSaveableで画面回転時に保持
   var inputText by rememberSaveable { mutableStateOf("") }
+  // A picture to send with the next message (base64 JPEG), e.g. to the character creator.
+  var pendingImage by remember { mutableStateOf<String?>(null) }
   var isThinking by remember { mutableStateOf(false) }
+  // The reply is already coming in piece by piece (shown and read before it is finished).
+  var liveReply by remember { mutableStateOf(false) }
   var statusMessage by remember { mutableStateOf("") }
   // 「キャラっぽくない」フィードバック対象の返答
   var feedbackTarget by remember { mutableStateOf<PartnerSingleChatMessage?>(null) }
@@ -192,6 +215,14 @@ internal fun PartnerChatScreen(
   // 「いつも読む」: every new reply is read aloud without pressing play. Kept on the phone.
   val voicePrefs = remember { ttsContext.getSharedPreferences("partner_voice", android.content.Context.MODE_PRIVATE) }
   var autoRead by remember { mutableStateOf(voicePrefs.getBoolean("auto_read", false)) }
+  var avatarOn by remember { mutableStateOf(voicePrefs.getBoolean("avatar_on", true)) }
+  var avatarModelsOpen by remember { mutableStateOf(false) }
+  if (avatarModelsOpen && partnerSourceCharacterId.isNotBlank()) {
+    AvatarModelsDialog(viewModel = viewModel, ownerId = partnerSourceCharacterId, onClose = { avatarModelsOpen = false })
+  }
+  // アバター欄の高さ（dp）。境目をドラッグして変え、次に開いても覚えている
+  var avatarHeightDp by remember { mutableStateOf(voicePrefs.getFloat("avatar_height_dp", 220f)) }
+  val screenHeightDp = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp
   DisposableEffect(Unit) {
     lateinit var engine: android.speech.tts.TextToSpeech
     engine =
@@ -325,6 +356,7 @@ internal fun PartnerChatScreen(
         if (pObj != null) {
           partnerName = pObj.optString("name", "AIパートナー")
           partnerAvatarUrl = pObj.optString("avatarUrl", "")
+          partnerSourceCharacterId = pObj.optString("sourceCharacterId", "")
           partnerPersona = pObj.optString("persona", "")
           partnerModel = pObj.optString("modelId", "")
         }
@@ -354,8 +386,10 @@ internal fun PartnerChatScreen(
 
   fun sendMessage() {
     val currentId = partnerId ?: return
-    val text = inputText.trim()
+    val image = pendingImage
+    val text = inputText.trim().ifBlank { if (image != null) "（画像を送りました）" else "" }
     if (text.isBlank() || isThinking) return
+    pendingImage = null
 
     val tempUserMsg = PartnerSingleChatMessage(
       id = "temp-user-${System.currentTimeMillis()}",
@@ -366,11 +400,32 @@ internal fun PartnerChatScreen(
     messages = messages + tempUserMsg
     inputText = ""
     isThinking = true
+    liveReply = false
+    val baseMessages = messages
 
     sendJob = coroutineScope.launch {
+      var stream: PartnerVoicePlayer.SpeechStream? = null
+      var streamedText = ""
+      // The reply as the gateway writes it: shown at once, and read aloud from the first sentence.
+      val collector =
+        launch {
+          PartnerChatStream.deltas.collect { delta ->
+            if (delta.partnerId != currentId) return@collect
+            streamedText = delta.text
+            liveReply = true
+            if (autoRead && stream == null) {
+              stream = PartnerVoicePlayer.startStream(ttsContext, viewModel, currentId, "stream-$currentId", coroutineScope)
+            }
+            stream?.feed(delta.text)
+            val live = PartnerSingleChatMessage(id = "stream-live", role = "assistant", content = delta.text, timestamp = System.currentTimeMillis())
+            messages = baseMessages + live
+            listState.scrollToBottomSafely(messages.size - 1, animate = false)
+          }
+        }
       try {
         listState.scrollToBottomSafely(messages.size - 1)
-        val resStr = viewModel.sendPartnerMessage(currentId, text, thinkingMode)
+        val resStr = viewModel.sendPartnerMessage(currentId, text, thinkingMode, image)
+        collector.cancel()
         val obj = JSONObject(resStr)
         val arr = obj.optJSONArray("history") ?: JSONArray()
         val list = mutableListOf<PartnerSingleChatMessage>()
@@ -387,11 +442,16 @@ internal fun PartnerChatScreen(
         }
         // --- 🌟 スラスラ応答（リアルタイム・タイピングストリーミング演出） ---
         val lastAssistant = list.lastOrNull { it.role == "assistant" }
-        // Start the voice right away so the PC synthesizes while the text types itself out.
+        // Already reading from the stream: it takes the rest. Otherwise start the voice right away
+        // so the PC synthesizes while the text types itself out.
         if (autoRead && lastAssistant != null && lastAssistant.content.isNotBlank()) {
-          speak(lastAssistant.content, lastAssistant.id)
+          val handled = stream?.finish(lastAssistant.content) ?: false
+          if (!handled) speak(lastAssistant.content, lastAssistant.id)
         }
-        if (lastAssistant != null && lastAssistant.content.isNotBlank()) {
+        // The text was already shown while it was written: no typing effect on top of it.
+        if (streamedText.isNotBlank()) {
+          messages = list
+        } else if (lastAssistant != null && lastAssistant.content.isNotBlank()) {
           val fullText = lastAssistant.content
           val historyBase = list.dropLast(1)
           isThinking = false // 思考中ドットを閉じる
@@ -421,9 +481,13 @@ internal fun PartnerChatScreen(
         }
       } catch (e: Exception) {
         // C-3 修正: エラーメッセージ改善
+        collector.cancel()
+        stream?.cancel()
         statusMessage = friendlyError("メッセージ送信", e)
       } finally {
+        collector.cancel()
         isThinking = false
+        liveReply = false
       }
     }
   }
@@ -541,6 +605,8 @@ internal fun PartnerChatScreen(
     contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
   ) {
     Column(modifier = Modifier.fillMaxSize().imePadding()) {
+      // PC が画像・動画などの作業中で、チャットAIを止めているときの知らせ
+      GpuBusyBanner(viewModel)
       // --- ヘッダー（最大高さ56dpでチャット欄のスペースを完全死守） ---
       Row(
         modifier = Modifier
@@ -628,6 +694,32 @@ internal fun PartnerChatScreen(
                 onOpenCharacterSheet()
               },
             )
+            if (FoldStageBus.bookMode && partnerSourceCharacterId.isNotBlank()) {
+              DropdownMenuItem(
+                text = { Text(if (FoldStageBus.showCharacter) "☰ 横の画面をメニューにする" else "👤 横の画面にキャラを出す") },
+                onClick = {
+                  headerMenuExpanded = false
+                  FoldStageBus.saveShowCharacter(foldContext, !FoldStageBus.showCharacter)
+                },
+              )
+            }
+            if (partnerSourceCharacterId.isNotBlank()) {
+              DropdownMenuItem(
+                text = { Text("🎭 Live2D・3Dモデル") },
+                onClick = {
+                  headerMenuExpanded = false
+                  avatarModelsOpen = true
+                },
+              )
+              DropdownMenuItem(
+                text = { Text(if (avatarOn) "🎭 アバターを隠す" else "🎭 アバターを出す") },
+                onClick = {
+                  avatarOn = !avatarOn
+                  voicePrefs.edit().putBoolean("avatar_on", avatarOn).apply()
+                  headerMenuExpanded = false
+                },
+              )
+            }
             DropdownMenuItem(
               text = { Text("🧠 この子の記憶 (MEMORY.md)") },
               onClick = {
@@ -650,6 +742,53 @@ internal fun PartnerChatScreen(
               },
             )
           }
+        }
+      }
+
+      // 折りたたみの横の画面に出すため、いま話しているキャラを知らせる
+      androidx.compose.runtime.SideEffect {
+        FoldStageBus.characterId = if (avatarOn) partnerSourceCharacterId else ""
+        FoldStageBus.speaking = speakingKey != null
+        FoldStageBus.lastReply = messages.lastOrNull { it.role == "assistant" }?.content.orEmpty()
+      }
+      DisposableEffect(Unit) { onDispose { FoldStageBus.characterId = "" } }
+
+      // アバター（キャラ図鑑のキャラに表情の絵を作ってあるときだけ出る）
+      if (partnerSourceCharacterId.isNotBlank() && avatarOn && !(FoldStageBus.bookMode && FoldStageBus.showCharacter)) {
+        androidx.compose.runtime.LaunchedEffect(messages.size) { AffectBus.refresh(viewModel) }
+        AffectBar(viewModel)
+        PartnerAvatarStage(
+          viewModel = viewModel,
+          characterId = partnerSourceCharacterId,
+          speaking = speakingKey != null,
+          lastReply = messages.lastOrNull { it.role == "assistant" }?.content.orEmpty(),
+          height = avatarHeightDp.dp,
+        )
+        // 境目：上下にドラッグして、アバター欄とチャット欄の大きさを変える
+        val handleDensity = androidx.compose.ui.platform.LocalDensity.current.density
+        Box(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .height(24.dp)
+              .pointerInput(screenHeightDp) {
+                detectVerticalDragGestures(
+                  onDragEnd = { voicePrefs.edit().putFloat("avatar_height_dp", avatarHeightDp).apply() },
+                ) { change, dragAmount ->
+                  change.consume()
+                  avatarHeightDp = (avatarHeightDp + dragAmount / handleDensity).coerceIn(80f, screenHeightDp * 0.7f)
+                }
+              },
+          contentAlignment = Alignment.Center,
+        ) {
+          Box(
+            modifier =
+              Modifier
+                .width(44.dp)
+                .height(5.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(ClawTheme.colors.textMuted.copy(alpha = 0.5f)),
+          )
         }
       }
 
@@ -820,7 +959,7 @@ internal fun PartnerChatScreen(
             }
           }
 
-          if (isThinking) {
+          if (isThinking && !liveReply) {
             item {
               Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -970,6 +1109,7 @@ internal fun PartnerChatScreen(
       val quickActions = remember {
         listOf(
           "🧠" to "記憶",
+          "📚" to "資料",
           "💖" to "絆",
           "🔮" to "占い",
           "🎮" to "ゲーム",
@@ -981,6 +1121,7 @@ internal fun PartnerChatScreen(
       }
       val quickActionHandlers: List<() -> Unit> = listOf(
         onOpenMemory,
+        onOpenKnowledge,
         onOpenBond,
         onOpenDailySettings,
         onOpenMiniGame,
@@ -1007,6 +1148,46 @@ internal fun PartnerChatScreen(
         }
       }
 
+      val imageContext = androidx.compose.ui.platform.LocalContext.current
+      val imagePicker =
+        rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+          if (uri == null) return@rememberLauncherForActivityResult
+          coroutineScope.launch {
+            pendingImage =
+              runCatching {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                  val source =
+                    imageContext.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+                      ?: error("画像を開けませんでした")
+                  val scale = 768f / maxOf(source.width, source.height)
+                  val sized =
+                    if (scale < 1f) {
+                      Bitmap.createScaledBitmap(source, (source.width * scale).toInt(), (source.height * scale).toInt(), true)
+                    } else {
+                      source
+                    }
+                  val out = ByteArrayOutputStream()
+                  sized.compress(Bitmap.CompressFormat.JPEG, 88, out)
+                  Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+                }
+              }.onFailure { statusMessage = "画像を読み込めませんでした: ${it.message}" }.getOrNull()
+          }
+        }
+      if (pendingImage != null) {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            text = "🖼 画像を添付しました（次の送信で一緒に送ります）",
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+            modifier = Modifier.weight(1f),
+          )
+          TextButton(onClick = { pendingImage = null }) { Text("取り消す") }
+        }
+      }
+
       // --- 入力バー（アイコンFAB送信ボタン） ---
       Row(
         modifier = Modifier
@@ -1016,13 +1197,18 @@ internal fun PartnerChatScreen(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
+        ClawIconButton(
+          icon = Icons.Default.Image,
+          contentDescription = "画像を添付",
+          onClick = { imagePicker.launch("image/*") },
+        )
         ClawTextField(
           value = inputText,
           onValueChange = { inputText = it },
           placeholder = "${partnerName}にメッセージを送信...",
           modifier = Modifier.weight(1f),
         )
-        val canSend = inputText.isNotBlank() && !isThinking
+        val canSend = (inputText.isNotBlank() || pendingImage != null) && !isThinking
         FloatingActionButton(
           onClick = { if (canSend) sendMessage() },
           modifier = Modifier.size(42.dp),

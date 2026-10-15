@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { restoreChatModelIfPending } from "./chat-model-gate.js";
 import { readJsonFile, resolveOpenClawHome, writeJsonFile } from "./partner-store.js";
 
-// The group chat (マルチチャット) can use its own model. Entering the group chat swaps the main
-// llama-server (port 11434) to that model and remembers what ran before; leaving swaps it back.
-// If the app never says it left, ten quiet minutes or the next 1:1 partner chat swap back too.
+// Partner chats (1:1 and the group chat, マルチチャット) run their own model: a partner chat swaps the
+// main llama-server (port 11434) to that model and remembers what ran before. The partner model
+// stays loaded between chats; the previous model (the agent's) comes back only when the agent
+// runs (ensureAgentModel) or the user picks a model from the home screen.
 
 export type GroupChatModel = {
   id: string;
@@ -19,16 +21,24 @@ export type GroupChatModel = {
 const UNCENSORED = "D:\\llm-models\\uncensored";
 
 /**
- * Measured on the real group chat flow with Bonsai stopped (2026-10-03, RTX 4060 8 GB).
+ * Measured with a real 1:1 partner chat on the RTX 4060 8 GB (2026-10-03, 16K context).
  * --fit lets llama.cpp keep as many MoE experts on the GPU as fit; --fit-target 1800 leaves
  * ~1.8 GB free so the partners' clone voices (Qwen3-TTS) can speak next to the model.
- * Dropped: Gemma 4 12B (13 tok/s, failed mid-conversation), Qwen3 30B-A3B ERP (failed).
+ * The Gemma 4 26B builds break the agent's tool calls, so they serve partner chats only.
+ * Dropped: Gemma 4 12B (13 tok/s), Qwen3 30B-A3B ERP (failed).
  */
 export const GROUP_CHAT_MODELS: GroupChatModel[] = [
   {
+    id: "gemma4-26b-a4b-jp-72e",
+    label: "Gemma 4 26B 日本語・軽量（おすすめ）",
+    description: "会話が自然で、いちばん速い。毎秒約37。",
+    file: path.join(UNCENSORED, "gemma-4-26B-A4B-it-qat-heretic-japanese-72e-Q4_0.gguf"),
+    extra: ["--fit-target", "1800"],
+  },
+  {
     id: "gemma4-26b-a4b-jp",
-    label: "Gemma 4 26B 日本語（おすすめ）",
-    description: "賢くキャラの個性がはっきり出る。毎秒約30。",
+    label: "Gemma 4 26B 日本語（標準）",
+    description: "賢くキャラの個性がはっきり出る。毎秒約28。",
     file: path.join(UNCENSORED, "gemma-4-26B-A4B-it-qat-heretic-japanese-96e-Q4_0.gguf"),
     extra: ["--fit-target", "1800"],
   },
@@ -49,9 +59,11 @@ export const GROUP_CHAT_MODELS: GroupChatModel[] = [
 ];
 
 /** Used until the user picks one. */
-const DEFAULT_GROUP_MODEL = "gemma4-26b-a4b-jp";
-const IDLE_RESTORE_MS = 10 * 60_000;
+const DEFAULT_GROUP_MODEL = "gemma4-26b-a4b-jp-72e";
+/** A 1:1 chat sends the full character sheet plus 20 turns; 8K was too small for that. */
+const PARTNER_MODEL_CONTEXT = 16384;
 const READY_TIMEOUT_MS = 240_000;
+const PARTNER_ALIAS_PREFIX = "groupchat-";
 
 function bonsaiDir(): string {
   return path.join(resolveOpenClawHome(), "bonsai");
@@ -59,7 +71,7 @@ function bonsaiDir(): string {
 function settingsFile(): string {
   return path.join(bonsaiDir(), "groupchat_model.json");
 }
-/** The main model's command line while the group model runs; its presence means "in group mode". */
+/** The agent model's command line while a partner model runs; its presence means "partner mode". */
 function previousCmdFile(): string {
   return path.join(bonsaiDir(), "groupchat_prev_cmdline.txt");
 }
@@ -82,23 +94,32 @@ export async function getGroupChatModelId(): Promise<string> {
   return id === "main" || GROUP_CHAT_MODELS.some((m) => m.id === id) ? id : DEFAULT_GROUP_MODEL;
 }
 
+/** "main" means partner chats use the agent's model, so a loaded partner model is swapped out. */
 export async function setGroupChatModelId(modelId: string): Promise<string> {
   if (modelId !== "main" && !GROUP_CHAT_MODELS.some((m) => m.id === modelId))
     throw new Error(`Unknown group chat model: ${modelId}`);
   await writeJsonFile(settingsFile(), { modelId });
+  if (modelId === "main") await leaveGroupChatMode();
   return modelId;
 }
 
-/** llama-server command line for a group model (upstream build: Gemma 4 / Qwen3 MoE need it). */
+/** llama-server command line for a partner model (upstream build: Gemma 4 / Qwen3 MoE need it). */
 export function groupModelCmdline(model: GroupChatModel, server = mainlineServer()): string {
+  const device = process.env.OPENCLAW_MAIN_CUDA_DEVICE?.trim();
   return [
     `"${server}"`,
     `-m "${model.file}"`,
-    "--host 127.0.0.1 --port 11434 -c 8192 -np 1 -fa on -ctk q8_0 -ctv q8_0",
+    `--host 127.0.0.1 --port 11434 -c ${PARTNER_MODEL_CONTEXT} -np 1 -fa on -ctk q8_0 -ctv q8_0`,
     "--load-mode none --jinja",
+    ...(device ? [`--device ${device}`] : []),
     ...model.extra,
-    `-a groupchat-${model.id}`,
+    `-a ${PARTNER_ALIAS_PREFIX}${model.id}`,
   ].join(" ");
+}
+
+/** True for a command line that runs a partner model rather than the agent's model. */
+export function isPartnerModelCmdline(cmdline: string): boolean {
+  return cmdline.includes(`-a ${PARTNER_ALIAS_PREFIX}`);
 }
 
 function runPowerShell(command: string): Promise<void> {
@@ -123,6 +144,33 @@ async function isMainReady(): Promise<boolean> {
   }
 }
 
+/** The alias the main server reports (llama-server lists only the loaded model). */
+async function loadedAlias(): Promise<string | undefined> {
+  try {
+    const res = await fetch("http://127.0.0.1:11434/v1/models", {
+      signal: AbortSignal.timeout(3_000),
+    });
+    if (!res.ok) return undefined;
+    const json = (await res.json()) as { data?: Array<{ id?: string }> };
+    return json.data?.[0]?.id;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * After a generation job the chat model is not restarted at once (media-studio waits a while).
+ * A chat message ends the wait: the model starts now and this returns when it answers.
+ */
+async function wakeChatModel(): Promise<void> {
+  if (!(await restoreChatModelIfPending())) return;
+  const deadline = Date.now() + READY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (await isMainReady()) return;
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+}
+
 /** Stops whatever serves port 11434 and starts `cmdline` detached, then waits for it. */
 async function swapMainServer(cmdline: string, workDir: string): Promise<void> {
   const escaped = cmdline.replace(/'/g, "''");
@@ -137,59 +185,91 @@ async function swapMainServer(cmdline: string, workDir: string): Promise<void> {
   throw new Error("model did not become ready in time");
 }
 
-let idleTimer: ReturnType<typeof setTimeout> | undefined;
+/**
+ * The agent model to come back to. The watchdog records whatever runs (a partner model too), so a
+ * recorded partner model falls back to the default model rather than becoming "the agent's".
+ */
+async function agentModelCmdline(): Promise<string> {
+  const last = await fs
+    .readFile(path.join(bonsaiDir(), "last_main_cmdline.txt"), "utf-8")
+    .then((text) => text.trim())
+    .catch(() => "");
+  if (last && !isPartnerModelCmdline(last)) return last;
+  return (await fs.readFile(path.join(bonsaiDir(), "default_main_cmdline.txt"), "utf-8")).trim();
+}
+
 let switching: Promise<unknown> = Promise.resolve();
 
-/** Serializes swaps so enter and leave never interleave. */
+/** Serializes swaps so entering and leaving never interleave. */
 function serialized<T>(task: () => Promise<T>): Promise<T> {
   const next = switching.then(task, task);
   switching = next.catch(() => undefined);
   return next;
 }
 
-/** Keeps group mode while turns keep coming; swaps back after ten quiet minutes. */
-export function touchGroupChatMode(): void {
-  if (idleTimer) clearTimeout(idleTimer);
-  idleTimer = setTimeout(() => void leaveGroupChatMode().catch(() => undefined), IDLE_RESTORE_MS);
-  idleTimer.unref?.();
-}
-
+/**
+ * Makes sure the partner model serves port 11434 (1:1 and group partner chats call this before
+ * every reply). A no-op when it is already loaded, so only the first message after the agent or
+ * a media job waits for the swap.
+ */
 export function enterGroupChatMode(): Promise<{
   modelId: string;
   switched: boolean;
   busy?: boolean;
 }> {
   return serialized(async () => {
+    await wakeChatModel();
     const modelId = await getGroupChatModelId();
     if (modelId === "main") return { modelId, switched: false };
-    // A media job holds the GPU; the chat model comes back when it ends.
+    // A media job or voice training holds the GPU; the chat model comes back when it ends.
     if (await exists(path.join(bonsaiDir(), "llm-pause.flag")))
       return { modelId, switched: false, busy: true };
     const model = GROUP_CHAT_MODELS.find((m) => m.id === modelId);
     if (!model || !(await exists(model.file))) throw new Error(`model file missing: ${modelId}`);
-    if (!(await exists(previousCmdFile()))) {
-      const previous = await fs.readFile(path.join(bonsaiDir(), "last_main_cmdline.txt"), "utf-8");
-      await fs.writeFile(previousCmdFile(), previous.trim(), "utf-8");
+    if (
+      (await exists(previousCmdFile())) &&
+      (await loadedAlias()) === `${PARTNER_ALIAS_PREFIX}${model.id}`
+    ) {
+      return { modelId, switched: false };
     }
-    touchGroupChatMode();
+    if (!(await exists(previousCmdFile()))) {
+      await fs.writeFile(previousCmdFile(), await agentModelCmdline(), "utf-8");
+    }
     await swapMainServer(groupModelCmdline(model), path.dirname(mainlineServer()));
     return { modelId, switched: true };
   });
 }
 
-/** Swaps the model that ran before the group chat back in; a no-op outside group mode. */
+/** Swaps the agent's model back in; a no-op outside partner mode. */
 export function leaveGroupChatMode(): Promise<{ restored: boolean }> {
   return serialized(async () => {
-    if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = undefined;
     if (!(await exists(previousCmdFile()))) return { restored: false };
     const previous = (await fs.readFile(previousCmdFile(), "utf-8")).trim();
     await fs.rm(previousCmdFile(), { force: true });
     if (!previous) return { restored: false };
-    // The watchdog and media jobs restart "the last model"; make that the main model again.
+    // The watchdog and media jobs restart "the last model"; make that the agent's model again.
     await fs.writeFile(path.join(bonsaiDir(), "last_main_cmdline.txt"), previous, "utf-8");
     if (await exists(path.join(bonsaiDir(), "llm-pause.flag"))) return { restored: false };
     await swapMainServer(previous, path.join(bonsaiDir(), "bin"));
     return { restored: true };
   });
+}
+
+/**
+ * Called before the main agent talks to its model: the partner models write tool calls as text,
+ * so the agent's own model must be loaded. Costs one file check outside partner mode.
+ */
+export async function ensureAgentModel(): Promise<void> {
+  await wakeChatModel();
+  if (await exists(previousCmdFile())) {
+    await leaveGroupChatMode();
+  }
+}
+
+/**
+ * The user picked a model from the home screen: that model is the agent's from now on, so the
+ * partner mode forgets the one it would have restored.
+ */
+export async function forgetPartnerModeState(): Promise<void> {
+  await serialized(() => fs.rm(previousCmdFile(), { force: true }));
 }

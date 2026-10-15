@@ -229,8 +229,7 @@ internal fun GroupChatScreen(
       isLoopRunning = false
       loopJob?.cancel()
       PartnerVoicePlayer.stop()
-      // Bring the main model (Bonsai) back for the 1:1 and agent chats.
-      viewModel.leaveGroupChatModel()
+      // The partner model stays loaded for 1:1 chats; the PC swaps back when the agent runs.
     }
   }
 
@@ -508,85 +507,67 @@ internal fun GroupChatScreen(
 
       Spacer(modifier = Modifier.height(8.dp))
 
-      // 参加パートナー選択バー
-      LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(vertical = 4.dp)
-      ) {
-        items(availablePartners) { partner ->
-          val isSelected = selectedPartnerIds.contains(partner.id)
-          Box(
-            modifier = Modifier
-              .clip(RoundedCornerShape(20.dp))
-              .background(if (isSelected) ClawTheme.colors.primary.copy(alpha = 0.2f) else ClawTheme.colors.surfaceRaised)
-              .clickable {
-                selectedPartnerIds = if (isSelected) {
-                  if (selectedPartnerIds.size > 1) selectedPartnerIds - partner.id else selectedPartnerIds
-                } else {
-                  selectedPartnerIds + partner.id
-                }
-              }
-              .padding(horizontal = 12.dp, vertical = 6.dp)
-          ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-              if (isSelected) {
-                Icon(
-                  imageVector = Icons.Default.Check,
-                  contentDescription = "選択中",
-                  tint = ClawTheme.colors.primary,
-                  modifier = Modifier.size(16.dp).padding(end = 4.dp)
-                )
-              }
-              Text(
-                text = partner.name,
-                style = ClawTheme.type.caption.copy(fontSize = 12.sp),
-                color = if (isSelected) ClawTheme.colors.primary else ClawTheme.colors.text
-              )
-            }
+      // 参加するキャラと、使うモデルは、「キャラ」「モデル」のボタンから別ウィンドウで、アイコンを見て選ぶ
+      var showCharacterPicker by remember { mutableStateOf(false) }
+      var showModelPicker by remember { mutableStateOf(false) }
+      fun chooseModel(id: String) {
+        if (!modelReady || isLoopRunning || groupModelId == id) return
+        groupModelId = id
+        coroutineScope.launch {
+          // Choosing "main" makes the PC swap the agent model back in, which takes a while.
+          runCatching {
+            viewModel.runGatewayRpc(GatewayMethod.GroupchatModelSet, JSONObject().put("modelId", id).toString(), timeoutMs = 300_000)
+          }
+          if (id == "main") {
+            modelStatus = "いつものモデルで話します"
+          } else {
+            enterGroupModel()
           }
         }
       }
-
-      // 使うモデル（マルチチャット専用）と読み上げ
-      LazyRow(
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-      ) {
-        item {
-          Text("🧠 モデル", style = ClawTheme.type.caption.copy(fontSize = 11.sp), color = ClawTheme.colors.textMuted)
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Box(
+          modifier = Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(ClawTheme.colors.surfaceRaised).clickable { showCharacterPicker = true }.padding(horizontal = 12.dp, vertical = 10.dp),
+        ) {
+          Text(text = "👥 キャラ（${selectedPartnerIds.size}人）", style = ClawTheme.type.caption.copy(fontSize = 13.sp, fontWeight = FontWeight.Bold), color = ClawTheme.colors.text)
         }
-        items(groupModels) { (id, label) ->
-          val selected = groupModelId == id
-          Box(
-            modifier = Modifier
-              .clip(RoundedCornerShape(12.dp))
-              .background(if (selected) ClawTheme.colors.primary.copy(alpha = 0.2f) else ClawTheme.colors.surfaceRaised)
-              .clickable(enabled = modelReady && !isLoopRunning && !selected) {
-                groupModelId = id
-                coroutineScope.launch {
-                  runCatching {
-                    viewModel.runGatewayRpc(GatewayMethod.GroupchatModelSet, JSONObject().put("modelId", id).toString())
-                  }
-                  if (id == "main") {
-                    viewModel.leaveGroupChatModel()
-                    modelStatus = "いつものモデルで話します"
-                  } else {
-                    enterGroupModel()
-                  }
-                }
-              }
-              .padding(horizontal = 10.dp, vertical = 5.dp),
-          ) {
-            Text(
-              text = label,
-              style = ClawTheme.type.caption.copy(fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal),
-              color = if (selected) ClawTheme.colors.primary else ClawTheme.colors.textMuted,
-            )
-          }
+        Box(
+          modifier = Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(ClawTheme.colors.surfaceRaised).clickable { showModelPicker = true }.padding(horizontal = 12.dp, vertical = 10.dp),
+        ) {
+          Text(
+            text = "🧠 モデル：${groupModels.firstOrNull { it.first == groupModelId }?.second ?: "…"}",
+            style = ClawTheme.type.caption.copy(fontSize = 13.sp, fontWeight = FontWeight.Bold),
+            color = ClawTheme.colors.text,
+            maxLines = 1,
+          )
         }
+      }
+      // 参加中のキャラのアイコン
+      LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        items(availablePartners.filter { it.id in selectedPartnerIds }) { partner ->
+          PartnerAvatar(avatarUrl = partner.avatarUrl, name = partner.name, size = 36.dp)
+        }
+      }
+      if (showCharacterPicker) {
+        IconPickerDialog(
+          title = "👥 参加するキャラ",
+          items = availablePartners.map { IconChoice(it.id, it.name, avatarUrl = it.avatarUrl) },
+          selected = selectedPartnerIds,
+          multi = true,
+          minSelected = 1,
+          onPick = { id -> selectedPartnerIds = if (id in selectedPartnerIds) selectedPartnerIds - id else selectedPartnerIds + id },
+          onClose = { showCharacterPicker = false },
+        )
+      }
+      if (showModelPicker) {
+        IconPickerDialog(
+          title = "🧠 使うモデル",
+          items = groupModels.map { (id, label) -> IconChoice(id, label, emoji = "🧠", note = if (id == "main") "いつも使うモデル" else "") },
+          selected = setOf(groupModelId),
+          multi = false,
+          onPick = { id -> chooseModel(id) },
+          onClose = { showModelPicker = false },
+        )
       }
       Row(
         horizontalArrangement = Arrangement.spacedBy(6.dp),

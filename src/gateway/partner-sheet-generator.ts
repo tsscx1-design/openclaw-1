@@ -418,8 +418,10 @@ export function analyzeSpeech(params: {
   let polite = 0;
   let sentences = 0;
   for (const quote of quotes) {
-    for (const raw of quote.split(/[。！？!?\n]/u)) {
-      const sentence = raw.replace(/[（(][^）)]*[）)]|[…‥、,～〜ー\s]+$/gu, "").trim();
+    for (const raw of quote.split(/[\u3002\uFF01\uFF1F!?\n]/u)) {
+      const sentence = raw
+        .replace(/[\uFF08(][^\uFF09)]*[\uFF09)]|[\u2026\u2025\u3001,\uFF5E\u301C\u30FC\s]+$/gu, "")
+        .trim();
       if (sentence.length < 4) {
         continue;
       }

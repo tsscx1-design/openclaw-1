@@ -18,6 +18,11 @@ export type ResearchIO = {
   fetchPage: (url: string, maxChars: number) => Promise<FetchedPage | undefined>;
   /** General web search (the configured web_search provider); optional. */
   searchWeb?: (query: string, count: number) => Promise<SearchHit[]>;
+  /** Anime / manga character databases (AniList, Jikan); undefined when the character is not found. */
+  lookupCharacter?: (
+    name: string,
+    work?: string,
+  ) => Promise<{ url: string; title: string; site: string; text: string } | undefined>;
 };
 
 export type SourceOrigin = "wikipedia" | "user" | "encyclopedia" | "reference" | "search";
@@ -73,7 +78,7 @@ export function normalizeName(value: string): string {
   return value
     .normalize("NFKC")
     .replace(/\s*\([^)]*\)\s*$/u, "")
-    .replace(/[\s・･=＝]/gu, "")
+    .replace(/[\s\u30FB\uFF65=\uFF1D]/gu, "")
     .toLowerCase();
 }
 
@@ -81,9 +86,9 @@ export function normalizeName(value: string): string {
 export function normalizeForMatch(value: string): string {
   return value
     .normalize("NFKC")
-    .replace(/[\s「」『』"'“”‘’()[\]【】]/gu, "")
+    .replace(/[\s\u300c\u300d\u300e\u300f"'\u201c\u201d\u2018\u2019()[\]\u3010\u3011]/gu, "")
     .replace(/[…‥]|\.{2,}/gu, "…")
-    .replace(/[～〜~]/gu, "〜")
+    .replace(/[\uFF5E\u301C~]/gu, "\u301C")
     .toLowerCase();
 }
 
@@ -458,7 +463,7 @@ export function splitSpokenSentences(answer: string): string[] {
       depth += 1;
     } else if ((char === "」" || char === "』") && depth > 0) {
       depth -= 1;
-    } else if (depth === 0 && /[。！？!?]/u.test(char)) {
+    } else if (depth === 0 && /[\u3002\uff01\uff1f!?]/u.test(char)) {
       sentences.push(current);
       current = "";
     }
@@ -698,6 +703,25 @@ export async function researchPartnerSubject(params: {
     intro: wikipedia.intro,
     extra: params.aliases,
   });
+
+  if (kind !== "real_person" && io.lookupCharacter) {
+    progress("アニメ・マンガのデータベースを調べています");
+    try {
+      const found = await io.lookupCharacter(name, source);
+      if (found) {
+        sources.push({
+          url: found.url,
+          title: found.title,
+          site: found.site,
+          origin: "reference",
+          text: found.text,
+          fullText: found.text,
+        });
+      }
+    } catch {
+      // the character databases are a help; the other sources still run
+    }
+  }
 
   for (const url of params.urls ?? []) {
     const hit = { title: url, url };

@@ -101,6 +101,11 @@ export function weekdayJa(date = new Date()): string {
   return ["日", "月", "火", "水", "木", "金", "土"][date.getDay()] ?? "";
 }
 
+/** A news partner's morning message: the greeting, then the whole researched brief. */
+export function appendNewsDigest(message: string, news: string | undefined): string {
+  return news?.trim() ? `${message.trim()}\n\n📰 今日のニュース\n${news.trim()}` : message.trim();
+}
+
 /** One in-character completion on the main model. */
 export async function speakAs(
   partner: PartnerProfile,
@@ -177,17 +182,19 @@ async function composeDailyMessage(
     );
   }
   const brief = await loadBrief(partner).catch(() => undefined);
+  const news = brief && partner.settings?.newsDigest === true ? brief : undefined;
   const fortune = settings.fortuneWithGreeting
     ? await getTodaysFortune(partner).catch(() => undefined)
     : undefined;
   const greeting = await speakAs(
     partner,
-    `今は${localDateKey(now)}（${weekdayJa(now)}曜日）の朝です。ユーザーへの朝の挨拶と、今日を前向きに過ごせる一言を2〜3文で書いてください。返答の文章だけを出力。${brief ? `\n今日のトピック（1つ自然に紹介する）:\n${brief}` : ""}`,
+    `今は${localDateKey(now)}（${weekdayJa(now)}曜日）の朝です。ユーザーへの朝の挨拶と、今日を前向きに過ごせる一言を2〜3文で書いてください。返答の文章だけを出力。${news ? `\n今日のニュース（このあと全文を届ける）から1つ選んで、ひとこと感想を添える:\n${news}` : brief ? `\n今日のトピック（1つ自然に紹介する）:\n${brief}` : ""}`,
     { maxTokens: 250 },
   );
-  return fortune
+  const withFortune = fortune
     ? `${greeting.trim()}\n\n🔮 今日の運勢: ${fortune.luck}（ラッキーアイテム: ${fortune.item} / ラッキーカラー: ${fortune.color}）\n${fortune.message.trim()}`
     : greeting.trim();
+  return appendNewsDigest(withFortune, news);
 }
 
 /**

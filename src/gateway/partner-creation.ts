@@ -1,4 +1,5 @@
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { hitAsResearchText, pickBestHit, searchCharacters } from "./anime-lookup.js";
 import {
   researchPartnerSubject,
   type ResearchIO,
@@ -91,6 +92,16 @@ export function researchIoFromTools(params: {
       const title =
         typeof details?.title === "string" ? unwrapExternalText(details.title) : undefined;
       return { title, text };
+    },
+    lookupCharacter: async (name, work) => {
+      const hit = pickBestHit(await searchCharacters(name, fetchImpl), name, work);
+      if (!hit) return undefined;
+      return {
+        url: hit.url,
+        title: `${hit.source === "anilist" ? "AniList" : "MyAnimeList"}「${hit.name}」`,
+        site: hit.source === "anilist" ? "anilist.co" : "myanimelist.net",
+        text: hitAsResearchText(hit),
+      };
     },
     searchWeb: searchTool
       ? async (query, count) => {

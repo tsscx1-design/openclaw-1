@@ -4,12 +4,30 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import { createWebFetchTool, createWebSearchTool } from "../../agents/tools/web-tools.js";
 import {
+  addBlockedTerm,
+  exportBlockedTerms,
+  importBlockedTerms,
+  readBlockedTermsRaw,
+  removeBlockedTerm,
+  setBlockedTermsValue,
+} from "../blocked-terms-store.js";
+import {
   getAvatarJob,
   imageStudioStatus,
   sanitizeImagePrompt,
   startAvatarJob,
 } from "../image-studio.js";
 import { parseJsonObject } from "../llm-json.js";
+import {
+  applyTouch,
+  loadAffect,
+  setTouchProfile,
+  TOUCH_KINDS,
+  TOUCH_ZONES,
+  type TouchPreset,
+  type TouchProfile,
+  type TouchZone,
+} from "../partner-affect.js";
 import {
   addAlbumPhoto,
   deleteAlbumPhoto,
@@ -33,11 +51,26 @@ import {
   speakAs,
   weekdayJa,
 } from "../partner-daily.js";
-import { ensurePartnerProactiveLoop, loadOrBuildDailyBrief } from "../partner-proactive.js";
+import {
+  addKnowledge,
+  deleteKnowledge,
+  fetchSourceText,
+  getKnowledgeText,
+  listKnowledge,
+  pdfToText,
+  searchKnowledge,
+  updateKnowledge,
+} from "../partner-knowledge.js";
+import {
+  ensurePartnerProactiveLoop,
+  loadOrBuildDailyBrief,
+  startVoiceTraining,
+} from "../partner-proactive.js";
 import { clip, generatePartnerSheet, workerSheetCompletion } from "../partner-sheet-generator.js";
 import { buildPartnerSheetMarkdown, parsePartnerSheet } from "../partner-sheet-schema.js";
 import {
   addPartnerBondExp,
+  getPartnerDir,
   isValidPartnerId,
   loadPartnerBond,
   loadPartnerFacts,
@@ -52,16 +85,28 @@ import {
   writeJsonFile,
   type PartnerFact,
 } from "../partner-store.js";
-import { listTtsSpeakers, sanitizePartnerVoice, synthesizeSpeech } from "../partner-tts.js";
-import { listCloneVoices, synthesizeCloneSpeech } from "../partner-voice-clone.js";
+import { listTtsSpeakers, sanitizePartnerVoice } from "../partner-tts.js";
+import { listCloneVoices, listIrodoriVoices, speakWithVoice } from "../partner-voice-clone.js";
 import {
   finishSpecialistJob,
   setSpecialistJobStage,
   startSpecialistJob,
 } from "../specialist-jobs.js";
 import { executeSpecialistTask } from "../specialist-router.js";
+import { listStudioEngineVoices } from "../studio-engines.js";
 import { cleanGeneratedText, isFailedReplyText } from "../text-hygiene.js";
+import { analyzeVoiceCaption } from "../voice-acoustics.js";
 import { designVoiceDraft, draftPath, sanitizeVoiceCaption } from "../voice-design.js";
+import { voiceEngineStatuses } from "../voice-engines.js";
+import { importVoiceSample } from "../voice-sample-import.js";
+import { searchVoiceSamples } from "../voice-sample-search.js";
+import {
+  analyzeVoiceSpeakers,
+  readVoiceArtifact,
+  selectVoiceSpeaker,
+  speakerCandidates,
+  speakerPreview,
+} from "../voice-speaker-extraction.js";
 import {
   appendVoiceUpload,
   createDesignedVoice,
@@ -142,6 +187,19 @@ function guarded(
       fail(ctx.respond, String(err), ErrorCodes.UNAVAILABLE);
     }
   };
+}
+
+/** 禁止語句管理用: 失敗の理由を、そのままの文章でアプリに返す。 */
+function blockedTermsHandler(
+  handler: (params: Params, respond: RespondFn) => Promise<void>,
+): GatewayRequestHandlers[string] {
+  return guarded(async (params, respond) => {
+    try {
+      await handler(params, respond);
+    } catch (err) {
+      fail(respond, err instanceof Error ? err.message : String(err));
+    }
+  });
 }
 
 async function inCharacter(
@@ -427,6 +485,41 @@ function coreAgentSettingsFile(): string {
   return path.join(resolveOpenClawHome(), "coreagent-settings.json");
 }
 
+const MAX_KNOWLEDGE_UPLOAD_BYTES = 40 * 1024 * 1024;
+
+/**
+ * Appends one piece of an uploaded file; returns the whole file after the last piece, else
+ * undefined. Pieces live under the partner's knowledge/uploads until then.
+ */
+async function receiveKnowledgeChunk(
+  partnerId: string,
+  uploadId: string,
+  params: Record<string, unknown>,
+): Promise<Uint8Array | undefined> {
+  if (!/^[\w-]{1,64}$/.test(uploadId)) throw new Error("Invalid uploadId");
+  const index = Number(params.chunkIndex ?? 0);
+  const count = Number(params.chunkCount ?? 1);
+  if (!Number.isInteger(index) || !Number.isInteger(count) || index < 0 || index >= count) {
+    throw new Error("Invalid chunkIndex/chunkCount");
+  }
+  const dir = path.join(getPartnerDir(partnerId), "knowledge", "uploads");
+  await fs.mkdir(dir, { recursive: true });
+  const file = path.join(dir, `${uploadId}.part`);
+  if (index === 0) await fs.rm(file, { force: true });
+  await fs.appendFile(file, Buffer.from(str(params, "dataBase64") ?? "", "base64"));
+  const size = (await fs.stat(file)).size;
+  if (size > MAX_KNOWLEDGE_UPLOAD_BYTES) {
+    await fs.rm(file, { force: true });
+    throw new Error("ファイルが大きすぎます（40MBまで）");
+  }
+  if (index < count - 1) return undefined;
+  try {
+    return new Uint8Array(await fs.readFile(file));
+  } finally {
+    await fs.rm(file, { force: true });
+  }
+}
+
 // ---------- Handlers ----------
 
 const GAME_RULES: Record<string, string> = {
@@ -475,6 +568,38 @@ export const partnerFeatureHandlers: GatewayRequestHandlers = {
       str(params, "assistantReply") ?? "",
     );
     respond(true, { success: true, added }, undefined);
+  }),
+
+  // --- 好感度・気分・触り方 ---
+  "partner.affect.get": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    respond(true, { partnerName: partner.name, affect: await loadAffect(partner.id) }, undefined);
+  }),
+  "partner.affect.touch": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    const zone = TOUCH_ZONES.find((value) => value === str(params, "zone"));
+    const kind = TOUCH_KINDS.find((value) => value === str(params, "kind"));
+    if (!zone || !kind) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "zone と kind が必要です"));
+      return;
+    }
+    respond(
+      true,
+      await applyTouch(partner.id, zone, kind, typeof params.count === "number" ? params.count : 1),
+      undefined,
+    );
+  }),
+  "partner.affect.profile.set": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    const input: Partial<TouchProfile> = {};
+    if (Array.isArray(params.favorite)) input.favorite = params.favorite as TouchZone[];
+    if (Array.isArray(params.weak)) input.weak = params.weak as TouchZone[];
+    if (Array.isArray(params.dislike)) input.dislike = params.dislike as TouchZone[];
+    if (Array.isArray(params.presets)) input.presets = params.presets as TouchPreset[];
+    respond(true, { affect: await setTouchProfile(partner.id, input) }, undefined);
   }),
 
   // --- 絆レベル ---
@@ -946,7 +1071,11 @@ ${userInput.slice(0, 2000)}`,
     // Studio recordings can be imitated right away with Qwen3-TTS, before any night training.
     const projects = new Map((await listVoiceProjects()).map((p) => [p.id, p]));
     const clones = await Promise.all(
-      (await listCloneVoices()).map(async (clone) => {
+      [
+        ...(await listIrodoriVoices()),
+        ...(await listCloneVoices()),
+        ...(await listStudioEngineVoices()),
+      ].map(async (clone) => {
         const project = clone.voiceId ? projects.get(clone.voiceId) : undefined;
         return { ...clone, iconBase64: project ? await readVoiceIcon(project) : undefined };
       }),
@@ -955,6 +1084,10 @@ ${userInput.slice(0, 2000)}`,
   }),
 
   // --- 声作りスタジオ（本人の声 or 許可を得た声のみ） ---
+  // Every voice engine OpenClaw can use: installed, running, and what is missing (only looks; starts nothing).
+  "voice.engines": guarded(async (_params, respond) => {
+    respond(true, { engines: await voiceEngineStatuses() }, undefined);
+  }),
   "voice.list": guarded(async (_params, respond) => {
     const voices = await Promise.all(
       (await listVoiceProjects()).map(async (v) => ({ ...v, iconBase64: await readVoiceIcon(v) })),
@@ -978,8 +1111,8 @@ ${userInput.slice(0, 2000)}`,
   // Listen to a studio voice through voice cloning before giving it to a partner.
   "voice.preview": guarded(async (params, respond) => {
     const voiceId = str(params, "voiceId") ?? "";
-    const audio = await synthesizeCloneSpeech(
-      { engine: "clone", speakerId: 0, voiceId },
+    const audio = await speakWithVoice(
+      { engine: str(params, "engine") === "irodori" ? "irodori" : "clone", speakerId: 0, voiceId },
       str(params, "text") ?? "こんにちは。今日もよろしくね。どんなお話をしようか。",
     );
     respond(true, { mimeType: "audio/wav", audioBase64: audio.toString("base64") }, undefined);
@@ -989,6 +1122,7 @@ ${userInput.slice(0, 2000)}`,
     const { draftId, audio } = await designVoiceDraft(
       str(params, "caption") ?? "",
       str(params, "text"),
+      str(params, "model") === "large" ? "large" : "small",
     );
     respond(
       true,
@@ -1007,7 +1141,14 @@ ${userInput.slice(0, 2000)}`,
   "voice.create": guarded(async (params, respond) => {
     respond(
       true,
-      { voice: await createVoiceProject(str(params, "name") ?? "", params.consent) },
+      {
+        voice: await createVoiceProject(
+          str(params, "name") ?? "",
+          params.consent,
+          params.extraction === true,
+          str(params, "consentNote"),
+        ),
+      },
       undefined,
     );
   }),
@@ -1021,8 +1162,79 @@ ${userInput.slice(0, 2000)}`,
     });
     respond(true, { voice }, undefined);
   }),
+  "voice.speaker.analyze": guarded(async (params, respond) => {
+    respond(
+      true,
+      { candidates: await analyzeVoiceSpeakers(str(params, "voiceId") ?? "") },
+      undefined,
+    );
+  }),
+  "voice.caption.analyze": guarded(async (params, respond) => {
+    respond(
+      true,
+      await analyzeVoiceCaption(
+        str(params, "voiceId") ?? "",
+        str(params, "name"),
+        params.save === true,
+      ),
+      undefined,
+    );
+  }),
+  "voice.sample.search": guarded(async (params, respond) => {
+    respond(
+      true,
+      await searchVoiceSamples(
+        str(params, "source") ?? "",
+        Number(params.id),
+        str(params, "query") ?? "",
+      ),
+      undefined,
+    );
+  }),
+  "voice.sample.import": guarded(async (params, respond) => {
+    respond(
+      true,
+      await importVoiceSample(
+        str(params, "source") ?? "",
+        Number(params.id),
+        str(params, "url") ?? "",
+        params.consent,
+      ),
+      undefined,
+    );
+  }),
+  "voice.speaker.list": guarded(async (params, respond) => {
+    respond(true, { candidates: await speakerCandidates(str(params, "voiceId") ?? "") }, undefined);
+  }),
+  "voice.speaker.preview": guarded(async (params, respond) => {
+    const audio = await speakerPreview(str(params, "voiceId") ?? "", str(params, "name") ?? "");
+    respond(true, { audioBase64: audio.toString("base64"), mimeType: "audio/wav" }, undefined);
+  }),
+  "voice.speaker.select": guarded(async (params, respond) => {
+    respond(
+      true,
+      { voice: await selectVoiceSpeaker(str(params, "voiceId") ?? "", str(params, "name") ?? "") },
+      undefined,
+    );
+  }),
+  "voice.artifact.read": guarded(async (params, respond) => {
+    const kind = str(params, "kind") === "model" ? "model" : "candidate";
+    const result = await readVoiceArtifact(
+      str(params, "voiceId") ?? "",
+      kind,
+      str(params, "name") ?? "",
+      typeof params.offset === "number" ? params.offset : -1,
+    );
+    respond(true, result, undefined);
+  }),
+  // Queues a voice for the night window, or with `now: true` starts training right away.
   "voice.queue": guarded(async (params, respond) => {
-    respond(true, { voice: await queueVoiceTraining(str(params, "voiceId") ?? "") }, undefined);
+    const now = params.now === true;
+    const voice = await queueVoiceTraining(str(params, "voiceId") ?? "", { now });
+    respond(true, { voice }, undefined);
+    if (now) {
+      startVoiceTraining();
+    }
   }),
   "voice.delete": guarded(async (params, respond) => {
     await deleteVoiceProject(str(params, "voiceId") ?? "");
@@ -1044,10 +1256,7 @@ ${userInput.slice(0, 2000)}`,
       return;
     }
     const text = str(params, "text") ?? "";
-    const audio =
-      voice.engine === "clone"
-        ? await synthesizeCloneSpeech(voice, text)
-        : await synthesizeSpeech(voice, text);
+    const audio = await speakWithVoice(voice, text);
     respond(true, { mimeType: "audio/wav", audioBase64: audio.toString("base64") }, undefined);
   }),
 
@@ -1153,6 +1362,112 @@ ${userInput.slice(0, 2000)}`,
       );
   }),
 
+  // --- 資料棚（パートナーごとの PDF・Webページ・テキスト） ---
+  "partner.knowledge.list": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    respond(true, { partnerName: partner.name, docs: await listKnowledge(partner.id) }, undefined);
+  }),
+
+  "partner.knowledge.add": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    const url = str(params, "url")?.trim();
+    const pdfBase64 = str(params, "pdfBase64");
+    const text = str(params, "text");
+    let title = str(params, "title")?.trim() ?? "";
+    try {
+      // The app sends a PDF in pieces (uploadId + chunkIndex/chunkCount); work starts on the last.
+      let pdfBytes: Uint8Array | undefined = pdfBase64
+        ? new Uint8Array(Buffer.from(pdfBase64, "base64"))
+        : undefined;
+      const uploadId = str(params, "uploadId");
+      if (uploadId) {
+        const received = await receiveKnowledgeChunk(partner.id, uploadId, params);
+        if (!received) {
+          respond(true, { received: true }, undefined);
+          return;
+        }
+        pdfBytes = received;
+      }
+      let doc;
+      if (pdfBytes) {
+        const read = await pdfToText(pdfBytes);
+        const fileName = str(params, "fileName")?.trim() || "PDF";
+        doc = await addKnowledge(partner.id, {
+          title: title || read.title || fileName.replace(/\.pdf$/i, ""),
+          kind: "pdf",
+          source: fileName,
+          text: read.text,
+        });
+      } else if (url) {
+        const read = await fetchSourceText(url);
+        doc = await addKnowledge(partner.id, {
+          title: title || read.title || url,
+          kind: read.kind,
+          source: url,
+          text: read.text,
+        });
+      } else if (text?.trim()) {
+        title ||= text.trim().split("\n")[0]?.slice(0, 40) ?? "メモ";
+        doc = await addKnowledge(partner.id, { title, kind: "text", source: "", text });
+      } else {
+        fail(respond, "Missing pdfBase64, url or text");
+        return;
+      }
+      respond(true, { doc }, undefined);
+    } catch (err) {
+      fail(respond, err instanceof Error ? err.message : String(err));
+    }
+  }),
+
+  "partner.knowledge.delete": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    const docId = str(params, "docId");
+    if (!docId) {
+      fail(respond, "Missing docId");
+      return;
+    }
+    respond(true, { deleted: await deleteKnowledge(partner.id, docId) }, undefined);
+  }),
+
+  "partner.knowledge.get": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    const found = await getKnowledgeText(partner.id, str(params, "docId") ?? "");
+    if (!found) {
+      fail(respond, "資料が見つかりません");
+      return;
+    }
+    respond(true, found, undefined);
+  }),
+
+  "partner.knowledge.update": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    try {
+      const doc = await updateKnowledge(partner.id, str(params, "docId") ?? "", {
+        title: str(params, "title"),
+        text: str(params, "text"),
+      });
+      if (!doc) {
+        fail(respond, "資料が見つかりません");
+        return;
+      }
+      respond(true, { doc }, undefined);
+    } catch (err) {
+      fail(respond, err instanceof Error ? err.message : String(err));
+    }
+  }),
+
+  "partner.knowledge.search": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    const hits = await searchKnowledge(partner.id, str(params, "query") ?? "", 6);
+    respond(true, { hits }, undefined);
+  }),
+
   // --- キャラクターカード取り込み ---
   "partner.import.card": guarded(async (params, respond) => {
     const cardJson =
@@ -1222,5 +1537,77 @@ ${userInput.slice(0, 2000)}`,
       .catch((err) =>
         console.error(`[partner.import.card] sheet generation failed for ${card.name}:`, err),
       );
+  }),
+
+  // ── 禁止語句管理 ──────────────────────────────────────────────
+  // dist/blocked-terms.json を読み書きする。ファイルが無いときは、読み取りは空の設定、書き換えは失敗（作らない・コピーしない）。
+  // section は "blockedTermsJa" や "negativePromptTerms.imageNegative" のような、設定の中の道筋。
+
+  /** blocked-terms.json の全設定と、その場所を返す */
+  "blockedTerms.get": blockedTermsHandler(async (_params, respond) => {
+    const { file, config, exists, problems } = await readBlockedTermsRaw();
+    respond(true, { config, file, exists, problems }, undefined);
+  }),
+
+  /** section の語句の一覧に1語を足して保存する（field は terms / patterns / ja / enPatterns / forbiddenTags など） */
+  "blockedTerms.addTerm": blockedTermsHandler(async (params, respond) => {
+    const section = str(params, "section");
+    const term = str(params, "term");
+    if (!section || !term) {
+      fail(respond, "section と term が必要です");
+      return;
+    }
+    respond(true, { config: await addBlockedTerm(section, term, str(params, "field")) }, undefined);
+  }),
+
+  /** section の語句の一覧から1語を削除して保存する */
+  "blockedTerms.removeTerm": blockedTermsHandler(async (params, respond) => {
+    const section = str(params, "section");
+    const term = str(params, "term");
+    if (!section || !term) {
+      fail(respond, "section と term が必要です");
+      return;
+    }
+    respond(
+      true,
+      { config: await removeBlockedTerm(section, term, str(params, "field")) },
+      undefined,
+    );
+  }),
+
+  /** enabled など、すでにある項目の値を同じ型で更新する */
+  "blockedTerms.setConfig": blockedTermsHandler(async (params, respond) => {
+    const section = str(params, "section");
+    const key = str(params, "key");
+    const value = params["value"];
+    if (!section || !key || value === undefined) {
+      fail(respond, "section / key / value が必要です");
+      return;
+    }
+    respond(
+      true,
+      {
+        config: await setBlockedTermsValue(section, key, value, {
+          create: params["create"] === true,
+        }),
+      },
+      undefined,
+    );
+  }),
+
+  /** blocked-terms.json の内容をまるごとJSONテキストとして返す（バックアップ用）*/
+  "blockedTerms.export": blockedTermsHandler(async (_params, respond) => {
+    respond(true, { json: await exportBlockedTerms() }, undefined);
+  }),
+
+  /** AndroidからJSON文字列を受け取って blocked-terms.json に書き込む（リストア用）*/
+  "blockedTerms.import": blockedTermsHandler(async (params, respond) => {
+    const json = str(params, "json");
+    if (!json) {
+      fail(respond, "json が必要です");
+      return;
+    }
+    await importBlockedTerms(json);
+    respond(true, { ok: true }, undefined);
   }),
 };

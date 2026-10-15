@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { DAILY_DEFAULTS, dueDailyKinds, sanitizeDailySettings } from "./partner-daily.js";
+import {
+  appendNewsDigest,
+  DAILY_DEFAULTS,
+  dueDailyKinds,
+  sanitizeDailySettings,
+} from "./partner-daily.js";
 
 const at = (iso: string) => new Date(iso);
 const on = { ...DAILY_DEFAULTS, greetingEnabled: true, nightEnabled: true };
@@ -63,5 +68,14 @@ describe("dueDailyKinds", () => {
         now: at("2026-10-02T22:05:00"),
       }),
     ).toEqual([]);
+  });
+});
+
+describe("appendNewsDigest", () => {
+  it("puts a news partner's whole brief under the greeting", () => {
+    expect(appendNewsDigest("おはよう！", "- 新モデル公開（出典: a.jp）\n")).toBe(
+      "おはよう！\n\n📰 今日のニュース\n- 新モデル公開（出典: a.jp）",
+    );
+    expect(appendNewsDigest(" おはよう！ ", undefined)).toBe("おはよう！");
   });
 });

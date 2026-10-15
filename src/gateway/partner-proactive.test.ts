@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { birthdayFromFacts, chooseProactiveReason } from "./partner-proactive.js";
+import {
+  birthdayFromFacts,
+  chooseProactiveReason,
+  citedSites,
+  tidyBrief,
+  withRateLimitRetry,
+} from "./partner-proactive.js";
 import { sanitizePartnerSettings } from "./server-methods/partners.js";
 import {
   finishSpecialistJob,
@@ -69,6 +75,7 @@ describe("sanitizePartnerSettings", () => {
         temperature: 5,
         proactive: true,
         dailyTopics: ["天気", "", 3, "AIニュース"],
+        newsDigest: true,
         voicePitch: 0.1,
         injected: "x",
       }),
@@ -77,8 +84,64 @@ describe("sanitizePartnerSettings", () => {
       temperature: 1.2,
       proactive: true,
       dailyTopics: ["天気", "AIニュース"],
+      newsDigest: true,
       voicePitch: 0.5,
     });
+  });
+});
+
+describe("withRateLimitRetry", () => {
+  it("waits out a rate limit but not other errors", async () => {
+    let calls = 0;
+    const flaky = async () => {
+      calls += 1;
+      if (calls < 3) throw new Error("Gemini API error (429): You exceeded your current quota");
+      return "ok";
+    };
+    expect(await withRateLimitRetry(flaky, [1, 1])).toBe("ok");
+    expect(calls).toBe(3);
+    await expect(
+      withRateLimitRetry(async () => {
+        throw new Error("HTTP 500");
+      }, [1, 1]),
+    ).rejects.toThrow("HTTP 500");
+    await expect(
+      withRateLimitRetry(async () => {
+        throw new Error("429 Too Many Requests");
+      }, [1]),
+    ).rejects.toThrow("429");
+  });
+});
+
+describe("tidyBrief", () => {
+  it("drops the summarizer's preamble and uses ■ headings", () => {
+    expect(
+      tidyBrief(
+        "編集者として、資料に基づきまとめます。\n\n## 画像生成AI 新モデル\n- FLUX 3 が公開\n出典: a.jp\n\n\n## 音楽生成AI\n- Suno v5.5",
+      ),
+    ).toBe("■画像生成AI 新モデル\n- FLUX 3 が公開\n出典: a.jp\n\n■音楽生成AI\n- Suno v5.5");
+    expect(tidyBrief("- 晴れ\n- 阪神が勝利")).toBe("- 晴れ\n- 阪神が勝利");
+  });
+});
+
+describe("citedSites", () => {
+  it("names Gemini citations by title and listed results by host", () => {
+    expect(
+      citedSites({
+        citations: [
+          {
+            title: "itmedia.co.jp",
+            url: "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc",
+          },
+          { title: "itmedia.co.jp", url: "https://vertexaisearch.cloud.google.com/x" },
+          { title: "gigazine.net", url: "https://vertexaisearch.cloud.google.com/y" },
+        ],
+      }),
+    ).toEqual(["itmedia.co.jp", "gigazine.net"]);
+    expect(
+      citedSites({ results: [{ title: "新モデル公開", url: "https://www.example.com/news/1" }] }),
+    ).toEqual(["example.com"]);
+    expect(citedSites(undefined)).toEqual([]);
   });
 });
 
