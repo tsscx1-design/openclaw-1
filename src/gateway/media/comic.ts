@@ -32,20 +32,12 @@ import {
   parseComicScript,
   saveComicSeries,
 } from "../comic-series.js";
-import {
-  getMediaJob,
-  runCharacterAvatar,
-  runCharacterLora,
-  runCharacterMini,
-  runCharacterModel3d,
-  runCharacterOutpaint,
-  runCharacterSample,
-  runCharacterSheet,
-  runSampleBatch,
-  saveJobMeta,
-  working,
-} from "../media-studio.js";
+import { getMediaJob, saveJobMeta, working } from "../media-studio.js";
 import { loadSampleDescriptions, resolveSampleSubject } from "../sample-factory.js";
+import { runCharacterAvatar, runCharacterMini, runCharacterModel3d } from "./character-avatar.js";
+import { runCharacterLora } from "./character-lora.js";
+import { runCharacterSample, runSampleBatch } from "./character-samples.js";
+import { runCharacterOutpaint, runCharacterSheet } from "./character-sheet.js";
 import { acquireGpu } from "./gpu-lease.js";
 import {
   askScriptWriter,

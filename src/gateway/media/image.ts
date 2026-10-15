@@ -9,9 +9,10 @@ import { runTagger } from "../character-creator.js";
 import { getCharacter } from "../comic-characters.js";
 import { probeMedia } from "../face-swap.js";
 import { generationCudaDevice, generationCudaDevices, mediaProcessEnv } from "../media-gpu.js";
-import { currentJob, getMediaJob, queue, qwenTurboSettings } from "../media-studio.js";
+import { currentJob, getMediaJob, queue } from "../media-studio.js";
 import { adultLead, adultSentence } from "../minor-safeguards.js";
 import { upscaleWithSeedVr } from "../seedvr-comfy.js";
+import { qwenTurboSettings } from "./character-lora.js";
 import {
   IMAGE_MODEL,
   isSdxlModel,
