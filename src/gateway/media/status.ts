@@ -2,7 +2,6 @@ import * as path from "node:path";
 import { FACEFUSION_DIR, FACEFUSION_PYTHON } from "../face-swap.js";
 import { IRODORI_DIR, irodoriInstalled } from "../irodori-tts.js";
 import {
-  clearStalePauseFlag,
   currentJob,
   IMAGE_SERVER,
   MANGA_COMPOSE,
@@ -26,6 +25,7 @@ import {
   VIDEO_T5,
   VIDEO_VAE,
 } from "./config.js";
+import { clearStalePauseFlag } from "./gpu-lease.js";
 import { aceBin, exists, sdCli } from "./paths.js";
 import type { MediaKind } from "./types.js";
 

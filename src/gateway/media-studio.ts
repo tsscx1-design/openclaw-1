@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -18,14 +18,6 @@ import { assertAgeAllowed, negativeTags } from "./blocked-terms-config.js";
 import { runTagger } from "./character-creator.js";
 import { characterMotionPrompt, readCharacterMotionProfile } from "./character-motion-profile.js";
 import {
-  listeningLoopbackPid,
-  readChatEngine,
-  setChatEngineBusyCheck,
-  startSelectedChatEngine,
-  stopStrataProcesses,
-} from "./chat-engine.js";
-import { registerChatModelRestore } from "./chat-model-gate.js";
-import {
   breastTags,
   characterAssetDir,
   characterLook,
@@ -38,7 +30,6 @@ import {
   getCharacter,
   imageHeightTags,
   type LibraryCharacter,
-  listCharacters,
   lookWithOutfit,
   mergeLookTags,
   parseCreatorReply,
@@ -107,7 +98,6 @@ import { createWork, getWork, touchWork } from "./manga-works.js";
 import {
   generationCudaDevice,
   generationCudaDevices,
-  hasDedicatedMediaGpu,
   mediaProcessEnv,
   resolveGpuMode,
 } from "./media-gpu.js";
@@ -117,7 +107,6 @@ import {
   IMAGE_MODEL,
   isSdxlModel,
   isWanImageModel,
-  JOB_TIMEOUT_MS,
   KEEP_FAILED,
   MAX_QUEUE,
   MEDIA_MODEL_DIR,
@@ -140,15 +129,23 @@ import {
 } from "./media/config.js";
 import { COMFY_PYTHON_PATH, defaultJobSec, REALESRGAN_EXE } from "./media/estimates.js";
 import {
-  aceBin,
-  exists,
-  home,
-  lastMainCmdline,
-  outDir,
-  pauseFlag,
-  resultPath,
-  sdCli,
-} from "./media/paths.js";
+  acquireGpu,
+  latestTrainingState,
+  pausedByUs,
+  releaseGpu,
+  restoreChatModel,
+  stopCpuWorkers,
+  trainingDatasetCount,
+} from "./media/gpu-lease.js";
+import { aceBin, exists, outDir, pauseFlag, resultPath, sdCli } from "./media/paths.js";
+import {
+  activeChildren,
+  killProcessTree,
+  markStage,
+  runTool,
+  runWan2gpManifest,
+  stepNote,
+} from "./media/runner.js";
 import { mediaStudioStatus } from "./media/status.js";
 import {
   askGemma,
@@ -213,8 +210,6 @@ import {
   saveSampleIndex,
 } from "./sample-factory.js";
 import { upscaleWithSeedVr } from "./seedvr-comfy.js";
-import { SPECIALIST_WORKERS } from "./specialist-router.js";
-import { listVoiceProjects } from "./voice-studio.js";
 export {
   type ImageModel,
   type MediaJob,
@@ -240,6 +235,7 @@ export {
   type MediaEstimate,
   selectBgmPrompt,
 } from "./media/estimates.js";
+export { latestTrainingState, trainingDatasetCount } from "./media/gpu-lease.js";
 
 // Local image / video / music generation on the RTX 4060 (8 GB).
 // The main chat LLM holds almost all VRAM, so a job stops it (the watchdog pause flag keeps it
@@ -249,376 +245,8 @@ export {
 //          text-to-video renders a still with the image model first, then animates it
 //   music: acestep.cpp (ace-lm + ace-synth) + ACE-Step 1.5 turbo; lyrics are written by its LM
 
-// ---------- GPU lease ----------
-
-let pausedByUs = false;
-
-/**
- * The chat model comes back this long after the last job, not at once: jobs often follow each other
- * and every restart costs 1-1.5 minutes of loading. A chat message brings it back sooner.
- */
-const CHAT_RESTORE_DELAY_MS = 10 * 60_000;
-
-let chatRestoreTimer: ReturnType<typeof setTimeout> | undefined;
-
-function cancelChatRestoreTimer(): void {
-  if (chatRestoreTimer) clearTimeout(chatRestoreTimer);
-  chatRestoreTimer = undefined;
-}
-
-// A chat message that arrives while the model waits to be restored starts it right away.
-// The chat model switch (Gemma / Strata) must not cut a running job off.
-setChatEngineBusyCheck(() => working || queue.length > 0);
-
-registerChatModelRestore(async () => {
-  if (!chatRestoreTimer || working || queue.length > 0) return false;
-  await restoreChatModel();
-  return true;
-});
-
-function runPowerShell(command: string): Promise<string> {
-  return new Promise((resolve) => {
-    const ps = spawn("powershell.exe", ["-NoProfile", "-Command", command], {
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    let out = "";
-    ps.stdout?.on("data", (chunk) => (out += String(chunk)));
-    ps.on("exit", () => resolve(out.trim()));
-    ps.on("error", () => resolve(out.trim()));
-  });
-}
-
-async function acquireGpu(job: MediaJob): Promise<void> {
-  const speedPriority = job.options.gpuMode === "fast";
-  cancelChatRestoreTimer();
-  if (hasDedicatedMediaGpu() && !speedPriority) {
-    if (pausedByUs) await restoreChatModel();
-    return;
-  }
-  // The small Irodori model may be resident next to the chat model for partner voices.
-  stopIrodoriWorker();
-  // Voice training may already hold the flag; then it owns the restart too.
-  const strataChat = readChatEngine() === "strata";
-  if (!(await exists(pauseFlag()))) {
-    await fs.writeFile(pauseFlag(), String(Date.now()));
-    pausedByUs = true;
-  } else if (strataChat) {
-    // Strata keeps the flag up all the time; the chat model still has to come back after this job.
-    pausedByUs = true;
-  }
-  // netstat + kill instead of PowerShell: PowerShell starts very slowly when the gateway runs
-  // as a scheduled task, and this sits on the critical path of every job.
-  const pid = await listeningPid(11434);
-  if (pid) {
-    try {
-      process.kill(pid);
-    } catch {
-      // Already gone.
-    }
-    // Strata's engine and vision helper hold the GPUs and may outlive its Python server.
-    if (strataChat) await stopStrataProcesses();
-    for (let i = 0; i < 20 && (await listeningPid(11434)); i++) {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-  }
-}
-
-function listeningPid(port: number): Promise<number | undefined> {
-  // Only a listener on this PC (loopback or all addresses). A Tailscale forward listens on the
-  // tailnet address of the same port (11434) and must never be taken for the model server.
-  return listeningLoopbackPid(port);
-}
-
-/**
- * Stops the CPU worker LLMs (~16 GB of RAM) for jobs that need nearly all memory; whoever uses
- * a worker next starts it again on demand.
- */
-async function stopCpuWorkers(): Promise<void> {
-  for (const worker of SPECIALIST_WORKERS) {
-    const pid = await listeningPid(worker.port);
-    if (!pid) continue;
-    try {
-      process.kill(pid);
-    } catch {
-      // Already gone.
-    }
-  }
-}
-
-/**
- * True while the chat model is paused for a job. A flag left behind (the gateway was restarted
- * while a job ran, so nobody releases it) is removed once nothing is running or waiting and the
- * flag is old, so the chat AI is not paused for ever.
- */
-export async function clearStalePauseFlag(): Promise<boolean> {
-  const flag = pauseFlag();
-  if (!(await exists(flag))) return false;
-  const age =
-    Date.now() -
-    (await fs
-      .stat(flag)
-      .then((s) => s.mtimeMs)
-      .catch(() => Date.now()));
-  const idle = !working && queue.length === 0 && !pausedByUs;
-  if (idle && age > 15 * 60_000 && !(await voiceTrainingActive())) {
-    await fs.rm(flag, { force: true });
-    return false;
-  }
-  return true;
-}
-
-async function voiceTrainingActive(): Promise<boolean> {
-  try {
-    return (await listVoiceProjects()).some((project) => project.status === "training");
-  } catch {
-    return false;
-  }
-}
-
-/** Called when the queue is empty: the chat model returns after a delay (see CHAT_RESTORE_DELAY_MS). */
-async function releaseGpu(): Promise<void> {
-  if (!pausedByUs) return;
-  cancelChatRestoreTimer();
-  chatRestoreTimer = setTimeout(() => {
-    chatRestoreTimer = undefined;
-    if (working || queue.length > 0) return;
-    void restoreChatModel().catch(() => undefined);
-  }, CHAT_RESTORE_DELAY_MS);
-  chatRestoreTimer.unref?.();
-}
-
-/** Starts the chat model again now: removes the pause flag and does not wait for the watchdog. */
-async function restoreChatModel(): Promise<void> {
-  cancelChatRestoreTimer();
-  if (!pausedByUs) return;
-  pausedByUs = false;
-  // Strata is the chosen chat model: start it again and keep the pause flag (the watchdog only knows Gemma).
-  if (readChatEngine() === "strata") {
-    await startSelectedChatEngine();
-    return;
-  }
-  await fs.rm(pauseFlag(), { force: true });
-  // Bring the chat model back right away instead of waiting for the watchdog (~1 minute).
-  if (await exists(lastMainCmdline())) {
-    await runPowerShell(
-      `if (-not (Get-NetTCPConnection -LocalPort 11434 -State Listen -ErrorAction SilentlyContinue)) { $cmd = (Get-Content '${lastMainCmdline()}' -Raw).Trim(); ([wmiclass]'Win32_Process').Create($cmd, '${path.join(home(), "bonsai", "bin")}', $null) | Out-Null }`,
-    );
-  }
-}
-
-/** How many pictures (with their caption) the training dataset folder holds. */
-export async function trainingDatasetCount(imageDir: string): Promise<number> {
-  const names = await fs.readdir(imageDir).catch(() => [] as string[]);
-  const pictures = names.filter((name) => /\.(png|jpe?g|webp)$/i.test(name));
-  return pictures.filter((name) => names.includes(name.replace(/\.\w+$/, ".txt"))).length;
-}
-
-/** The folder of the last saved training state of a run (kept by --save_state), or undefined. */
-export async function latestTrainingState(
-  dir: string,
-  outName: string,
-): Promise<string | undefined> {
-  const names = (await fs.readdir(dir).catch(() => [] as string[]))
-    .filter((name) => name.startsWith(`${outName}-`) && name.endsWith("-state"))
-    .sort();
-  return names.length > 0 ? path.join(dir, names[names.length - 1]!) : undefined;
-}
-
-/**
- * A training that was running when the gateway stopped is left marked "training" with nothing running: it is marked as
- * cut off, and pressing "train" again goes on from where it was (the pictures and the saved epoch are kept).
- */
-async function markCutOffTrainings(): Promise<void> {
-  if (working || queue.length > 0) return;
-  for (const character of await listCharacters()) {
-    if (character.loraStatus !== "training" && character.loraStatus !== "queued") continue;
-    await saveCharacter({
-      ...character,
-      loraStatus: "failed",
-      loraStep: undefined,
-      loraError:
-        "中断しました（ゲートウェイの再起動など）。もう一度「学習」を押すと、続きから始まります",
-      updatedAt: Date.now(),
-    });
-  }
-}
-
-/**
- * The timer that brings the chat model back after a job lives in memory, so a gateway restart during or just after a job
- * left the pause flag behind and the chat model stopped for good. Some time after the gateway starts, a flag with no job
- * running is taken as such a leftover: the chat model is started again.
- */
-async function restoreStuckChatModel(): Promise<void> {
-  if (working || queue.length > 0) return;
-  if (!(await exists(pauseFlag()))) return;
-  pausedByUs = true;
-  await restoreChatModel().catch(() => undefined);
-}
-
-if (!process.env.VITEST) {
-  const stuck = setTimeout(
-    () =>
-      void restoreStuckChatModel()
-        .then(markCutOffTrainings)
-        .catch(() => undefined),
-    90_000,
-  );
-  stuck.unref?.();
-}
-
-// ---------- Runners ----------
-
-/** Sets the progress note and records how long the previous stage took. */
-function markStage(job: MediaJob, stage: string): void {
-  const now = Date.now();
-  const timings = (job.timings ??= {});
-  const last = timings.__at ?? job.startedAt ?? now;
-  // Step counters ("画像を描いています 12/28") roll up into one entry per stage.
-  const key = job.stage?.replace(/\s+\d+\/\d+$/, "");
-  if (key) timings[key] = (timings[key] ?? 0) + (now - last);
-  timings.__at = now;
-  job.stage = stage;
-}
-
 /** The job being worked on and the tool process it runs; a delete stops them. */
 export let currentJob: MediaJob | undefined;
-
-const activeChildren = new Set<ReturnType<typeof spawn>>();
-
-/** Stops a tool and everything it started (Wan2GP spawns its own workers). */
-function killProcessTree(pid: number | undefined): Promise<void> {
-  if (!pid) return Promise.resolve();
-  return new Promise((resolve) => {
-    execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }, () => resolve());
-  });
-}
-
-function runTool(
-  exe: string,
-  args: string[],
-  opts: {
-    cwd?: string;
-    env?: NodeJS.ProcessEnv;
-    cudaDevice?: string;
-    onLine?: (line: string) => void;
-    timeoutMs?: number;
-  },
-): Promise<void> {
-  if (currentJob?.cancelRequested) return Promise.reject(new Error("中止しました"));
-  return new Promise((resolve, reject) => {
-    const child = spawn(exe, args, {
-      cwd: opts.cwd ?? path.dirname(exe),
-      env: mediaProcessEnv(
-        opts.env,
-        opts.cudaDevice ?? generationCudaDevice(currentJob?.options.gpuMode === "fast"),
-      ),
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    activeChildren.add(child);
-    child.on("exit", () => {
-      activeChildren.delete(child);
-    });
-    // The gateway runs as a below-normal scheduled task and children inherit that class, which on
-    // Windows also lowers disk I/O priority: loading a 7 GB model then took minutes instead of seconds.
-    try {
-      if (child.pid) os.setPriority(child.pid, os.constants.priority.PRIORITY_NORMAL);
-    } catch {
-      // Priority is best-effort.
-    }
-    let tail = "";
-    const onData = (chunk: Buffer) => {
-      const text = chunk.toString("utf-8");
-      tail = (tail + text).slice(-3_000);
-      if (opts.onLine)
-        for (const line of text.split(/\r?\n|\r/)) if (line.trim()) opts.onLine(line.trim());
-    };
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error(`${path.basename(exe)} timed out`));
-    }, opts.timeoutMs ?? JOB_TIMEOUT_MS);
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    child.on("exit", (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve();
-      else
-        reject(
-          new Error(`${path.basename(exe)} exited with code ${code}: ${tail.trim().slice(-500)}`),
-        );
-    });
-  });
-}
-
-// Local FP16/BF16 throughput measures the 4060 at about 1.24x the 3060, so the
-// fastest-first device order completes equal image work closest to 55:45.
-const DUAL_GPU_PRIMARY_SHARE = 0.55;
-
-/** Runs a Wan2GP image manifest on one GPU, or splits independent images across both GPUs. */
-async function runWan2gpManifest(
-  job: MediaJob,
-  workDir: string,
-  settings: Record<string, unknown>[],
-  opts: {
-    timeoutMs: number;
-    onComplete?: (done: number, total: number) => void;
-  },
-): Promise<string[]> {
-  const devices = generationCudaDevices(job.options.gpuMode === "fast");
-  const dual = devices.length >= 2 && settings.length >= 2;
-  const split = dual
-    ? Math.max(1, Math.ceil(settings.length * DUAL_GPU_PRIMARY_SHARE))
-    : settings.length;
-  const shards = dual ? [settings.slice(0, split), settings.slice(split)] : [settings];
-  let done = 0;
-  const runs = shards.map(async (shard, index) => {
-    const shardDir = dual ? path.join(workDir, `gpu-${index + 1}`) : workDir;
-    await fs.mkdir(shardDir, { recursive: true });
-    const request = path.join(shardDir, "request.json");
-    await fs.writeFile(request, JSON.stringify({ output_dir: shardDir, settings: shard }));
-    let files: string[] = [];
-    await runTool(WAN2GP_PYTHON, [WAN2GP_RUNNER, request], {
-      cwd: WAN2GP_DIR,
-      cudaDevice: devices[index] ?? devices[0],
-      timeoutMs: opts.timeoutMs,
-      onLine: (line) => {
-        const result = /^RESULT (.*)$/.exec(line)?.[1];
-        if (result) files = JSON.parse(result) as string[];
-        if (/^PROGRESS 100\b/.test(line)) {
-          done += 1;
-          opts.onComplete?.(Math.min(done, settings.length), settings.length);
-        }
-      },
-    });
-    return files;
-  });
-  let produced: string[][];
-  try {
-    produced = await Promise.all(runs);
-  } catch (error) {
-    await Promise.all([...activeChildren].map((child) => killProcessTree(child.pid)));
-    await Promise.allSettled(runs);
-    throw error;
-  }
-  return produced.flat();
-}
-
-/** sd.cpp prints "|====>   | 12/28 - 1.23s/it"; turn it into a short stage note. */
-function stepNote(prefix: string, job: MediaJob) {
-  return (line: string) => {
-    const match = /(\d+)\/(\d+)\s*-\s*[\d.]+\s*(?:s\/it|it\/s)/.exec(line);
-    if (!match) return;
-    const stage = `${prefix} ${match[1]}/${match[2]}`;
-    if (job.stage?.startsWith(prefix)) job.stage = stage;
-    else markStage(job, stage);
-  };
-}
 
 // ---------- Resident SDXL worker (PyTorch) ----------
 // diffusers on the GPU samples ~2.5x faster than sd.cpp, and keeping the process (weights in RAM)
@@ -4982,7 +4610,7 @@ async function smoothVideo(job: MediaJob): Promise<void> {
 }
 
 // Wan2GP engines run headless through its Python API (openclaw_job.py); nothing is served on the network.
-const WAN2GP_DIR = "D:\\media-tools\\Wan2GP";
+export const WAN2GP_DIR = "D:\\media-tools\\Wan2GP";
 
 export const WAN2GP_PYTHON = path.join(WAN2GP_DIR, "venv", "Scripts", "python.exe");
 
