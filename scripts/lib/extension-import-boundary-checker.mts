@@ -10,6 +10,7 @@ import {
   normalizeRepoPath,
   resolveRepoSpecifier,
   writeLine,
+  type GroupedInventoryEntry,
 } from "./guard-inventory-utils.mjs";
 import { resolveRepoRoot } from "./repo-root.mjs";
 import { collectTypeScriptFilesFromRoots, resolveSourceRoots } from "./ts-guard-utils.mts";
@@ -50,6 +51,9 @@ type BoundaryCheckerParams<Entry> = {
   sourceOptions?: Record<string, unknown>;
   maxSourceBytes?: unknown;
   boundaryLabel?: string;
+  rule?: string;
+  cleanMessage?: string;
+  inventoryTitle?: string;
   skipSourcesWithoutBundledPluginPrefix?: boolean;
   shouldSkipFile?: (relativeFile: string) => boolean;
   acceptSpecifier?: (specifier: string, context: SpecifierContext) => boolean;
@@ -87,7 +91,7 @@ const ESCAPED_BUNDLED_PLUGIN_PATH_PREFIX_RE = new RegExp(
   "iu",
 );
 
-function compareEntries(left: BoundaryViolation, right: BoundaryViolation): number {
+function compareEntries(left: GroupedInventoryEntry, right: GroupedInventoryEntry): number {
   return (
     left.file.localeCompare(right.file) ||
     left.line - right.line ||
@@ -95,6 +99,28 @@ function compareEntries(left: BoundaryViolation, right: BoundaryViolation): numb
     left.specifier.localeCompare(right.specifier) ||
     left.reason.localeCompare(right.reason)
   );
+}
+
+function requireGroupedInventoryEntry(value: unknown): GroupedInventoryEntry {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "file" in value &&
+    typeof value.file === "string" &&
+    "line" in value &&
+    typeof value.line === "number" &&
+    "kind" in value &&
+    typeof value.kind === "string" &&
+    "reason" in value &&
+    typeof value.reason === "string" &&
+    "specifier" in value &&
+    typeof value.specifier === "string" &&
+    "resolvedPath" in value &&
+    (typeof value.resolvedPath === "string" || value.resolvedPath === null)
+  ) {
+    return value as GroupedInventoryEntry;
+  }
+  throw new Error("Custom boundary entries require compareEntries and a custom main function.");
 }
 
 function classifyResolvedExtensionReason(kind: string, boundaryLabel: string | undefined): string {
@@ -224,7 +250,7 @@ export function createExtensionImportBoundaryChecker<Entry = BoundaryViolation>(
     const compare =
       params.compareEntries ??
       ((left: Entry, right: Entry) =>
-        compareEntries(left as BoundaryViolation, right as BoundaryViolation));
+        compareEntries(requireGroupedInventoryEntry(left), requireGroupedInventoryEntry(right)));
     return inventory.toSorted(compare);
   }) as () => Promise<Entry[]>;
 
@@ -238,7 +264,17 @@ export function createExtensionImportBoundaryChecker<Entry = BoundaryViolation>(
     if (json) {
       writeLine(streams.stdout, JSON.stringify(inventory, null, 2));
     } else {
-      writeLine(streams.stdout, formatGroupedInventoryHuman(params, inventory));
+      writeLine(
+        streams.stdout,
+        formatGroupedInventoryHuman(
+          {
+            rule: params.rule ?? "Rule: extension import boundary",
+            cleanMessage: params.cleanMessage ?? "No import boundary violations found.",
+            inventoryTitle: params.inventoryTitle ?? "Import boundary inventory:",
+          },
+          inventory.map(requireGroupedInventoryEntry),
+        ),
+      );
       writeLine(
         streams.stdout,
         inventory.length === 0 ? "Boundary is clean." : "Boundary has violations.",

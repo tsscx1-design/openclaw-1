@@ -17,6 +17,7 @@ internal class ShellNavigation(
   settingsRouteFromHome: Boolean = false,
   dashboardSessionKey: String = "main",
   settingsRouteStack: List<SettingsRoute> = emptyList(),
+  tabHistory: List<Tab> = emptyList(),
 ) {
   var activeTab by mutableStateOf(activeTab)
     private set
@@ -38,8 +39,12 @@ internal class ShellNavigation(
   // (e.g., Home -> PartnerManagement -> PartnerCharacterSheet -> back to PartnerManagement).
   private var settingsRouteStack by mutableStateOf(settingsRouteStack)
 
-  /** Tab-bar-style switch: Back from the selected tab returns to Overview. */
+  // The tabs visited before this one (oldest first): Back goes to the screen before, not always Home.
+  private var tabHistory by mutableStateOf(tabHistory)
+
+  /** Tab-bar-style switch: Back from the selected tab returns to the tab it was opened from. */
   fun selectTab(tab: Tab) {
+    if (tab != activeTab) tabHistory = (tabHistory + activeTab).takeLast(MAX_TAB_HISTORY)
     if (tab == Tab.Settings) {
       settingsRoute = SettingsRoute.Home
       settingsRouteStack = emptyList()
@@ -68,7 +73,10 @@ internal class ShellNavigation(
 
   /** Opens a detail tab (Sessions, Providers) from another tab, remembering the origin for Back. */
   fun openDetailTab(tab: Tab) {
-    if (activeTab != tab) returnTab = activeTab
+    if (activeTab != tab) {
+      returnTab = activeTab
+      tabHistory = (tabHistory + activeTab).takeLast(MAX_TAB_HISTORY)
+    }
     activeTab = tab
   }
 
@@ -95,11 +103,24 @@ internal class ShellNavigation(
       }
     }
     if (activeTab == Tab.Dashboard) dashboardSessionKey = "main"
-    activeTab = returnTab ?: Tab.Overview
+    val origin = returnTab
+    val previous =
+      when {
+        origin != null -> {
+          // The origin is also the last entry of the history: take it once.
+          if (tabHistory.lastOrNull() == origin) tabHistory = tabHistory.dropLast(1)
+          origin
+        }
+        tabHistory.isNotEmpty() -> tabHistory.last().also { tabHistory = tabHistory.dropLast(1) }
+        else -> Tab.Overview
+      }
+    activeTab = previous
     returnTab = null
   }
 
   companion object {
+    private const val MAX_TAB_HISTORY = 20
+
     // Android may restore a saved Voice destination from before voice moved into
     // Chat. Normalize it here so runtime navigation only contains live screens.
     private fun restoreTab(name: String): Tab = if (name == "Voice") Tab.Chat else Tab.valueOf(name)
@@ -115,6 +136,7 @@ internal class ShellNavigation(
             nav.settingsRouteFromHome.toString(),
             nav.dashboardSessionKey,
             nav.settingsRouteStack.joinToString(",") { it.name },
+            nav.tabHistory.joinToString(",") { it.name },
           )
         },
         restore = { saved ->
@@ -124,7 +146,14 @@ internal class ShellNavigation(
               ?.split(",")
               ?.mapNotNull { name -> runCatching { SettingsRoute.valueOf(name) }.getOrNull() }
               ?: emptyList()
+          val history =
+            saved.getOrNull(6)
+              ?.takeIf { it.isNotEmpty() }
+              ?.split(",")
+              ?.mapNotNull { name -> runCatching { restoreTab(name) }.getOrNull() }
+              ?: emptyList()
           ShellNavigation(
+            tabHistory = history,
             activeTab = restoreTab(saved[0]),
             settingsRoute = SettingsRoute.valueOf(saved[1]),
             returnTab = saved[2].takeIf { it.isNotEmpty() }?.let(::restoreTab),

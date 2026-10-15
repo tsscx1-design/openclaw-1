@@ -221,6 +221,13 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     setSystemPrompt(legacySystemPrompt);
     log.debug(`hooks: applied systemPrompt (${legacySystemPrompt.length} chars)`);
   }
+  if (!input.isRawModelRun && input.sessionAgentId === "main") {
+    // Partner chats leave a partner model (Gemma) on the shared local server, and it writes tool
+    // calls as plain text; the agent's own model is swapped back in before its first model call.
+    await import("../../../gateway/group-chat-model.js")
+      .then((module) => module.ensureAgentModel())
+      .catch((err: unknown) => log.warn(`agent model swap-back failed: ${String(err)}`));
+  }
   // The app can make the main agent speak as a selected AI partner; tools stay unchanged.
   const mainChatPartnerContext =
     input.isRawModelRun || input.sessionAgentId !== "main"

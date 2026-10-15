@@ -149,6 +149,19 @@ class SecurePrefsTest {
   }
 
   @Test
+  fun sidebarKeepsAddedSettingsRoutesAndDropsRoutesThatCannotBePinned() {
+    assertEquals(
+      listOf("route:MediaStudio", "settings", "work", "home", "skills", "threads"),
+      sanitizeSidebarPageOrder(listOf("route:MediaStudio", "route:Home", "route:Nope", "unknown")),
+    )
+    assertEquals(
+      listOf("home", "route:VoiceStudio"),
+      sanitizeSidebarVisiblePages(listOf("home", "route:VoiceStudio", "route:Home")),
+    )
+    assertEquals(defaultSidebarVisiblePages, sanitizeSidebarVisiblePages(listOf("route:Home")))
+  }
+
+  @Test
   fun cameraAndAudioInputPreferencesDefaultAndPersist() {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)

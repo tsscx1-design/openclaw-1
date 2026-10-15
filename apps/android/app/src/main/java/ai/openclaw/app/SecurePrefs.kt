@@ -7,6 +7,7 @@ import ai.openclaw.app.gateway.GatewayCustomHeaders
 import ai.openclaw.app.gateway.GatewayRegistryStore
 import ai.openclaw.app.gateway.GatewayStoreMigration
 import ai.openclaw.app.node.parseHexColorArgb
+import ai.openclaw.app.ui.SettingsRoute
 import ai.openclaw.app.voice.VoiceWakePreferences
 import android.content.Context
 import android.content.SharedPreferences
@@ -59,16 +60,35 @@ data class GatewayCredentials(
 internal val defaultSidebarPageOrder = listOf("settings", "work", "home", "skills", "threads")
 internal val defaultSidebarVisiblePages = defaultSidebarPageOrder
 
+/** 左サイドバーに、ユーザーが「設定の項目」を足したときの ID の頭（route:<SettingsRoute の名前>）。 */
+internal const val SIDEBAR_ROUTE_PREFIX = "route:"
+
+internal fun sidebarRouteId(route: SettingsRoute): String = SIDEBAR_ROUTE_PREFIX + route.name
+
+/**
+ * 足せる設定の項目だけを返す。設定のトップ(Home)は固定の「設定」と重なり、スキルは固定の「スキル」と重なる。
+ * 実行時にしか使えないデスクトップ(Desktop)も除く。
+ */
+internal fun sidebarRouteOrNull(pageId: String): SettingsRoute? {
+  if (!pageId.startsWith(SIDEBAR_ROUTE_PREFIX)) return null
+  val name = pageId.removePrefix(SIDEBAR_ROUTE_PREFIX)
+  return SettingsRoute.entries.firstOrNull { it.name == name && isSidebarAddableRoute(it) }
+}
+
+internal fun isSidebarAddableRoute(route: SettingsRoute): Boolean =
+  route.category != null && route != SettingsRoute.Skills && route != SettingsRoute.Desktop
+
+internal fun isKnownSidebarPageId(pageId: String): Boolean =
+  pageId in defaultSidebarPageOrder || sidebarRouteOrNull(pageId) != null
+
 internal fun sanitizeSidebarPageOrder(pageIds: List<String>): List<String> {
-  val knownIds = defaultSidebarPageOrder.toSet()
   val supplied =
-    pageIds.map(String::trim).filter { it in knownIds }.distinct()
+    pageIds.map(String::trim).filter(::isKnownSidebarPageId).distinct()
   return supplied + defaultSidebarPageOrder.filterNot(supplied::contains)
 }
 
 internal fun sanitizeSidebarVisiblePages(pageIds: List<String>): List<String> {
-  val knownIds = defaultSidebarPageOrder.toSet()
-  val supplied = pageIds.map(String::trim).filter { it in knownIds }.distinct()
+  val supplied = pageIds.map(String::trim).filter(::isKnownSidebarPageId).distinct()
   // The sidebar UI refuses to unpin its final page. An empty persisted set can
   // therefore only come from corrupt or external state and recovers to defaults.
   return supplied.ifEmpty { defaultSidebarVisiblePages }

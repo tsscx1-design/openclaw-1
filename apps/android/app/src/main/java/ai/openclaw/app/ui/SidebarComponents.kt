@@ -234,7 +234,7 @@ internal fun SidebarActionRow(
 
 @Composable
 internal fun SidebarNavigationRow(
-  destination: SidebarDestination,
+  entry: SidebarEntry,
   rowHost: SidebarRowHost,
   selected: Boolean,
   pinned: Boolean? = null,
@@ -242,6 +242,8 @@ internal fun SidebarNavigationRow(
   onClick: () -> Unit,
   onMove: (Int) -> Unit,
   onDragActiveChange: (Boolean) -> Unit,
+  /** 足した設定の項目だけに付ける「外す」ボタン。固定の項目は null で、隠すことしかできない。 */
+  onRemove: (() -> Unit)? = null,
 ) {
   val thresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
   val haptic = LocalHapticFeedback.current
@@ -249,9 +251,9 @@ internal fun SidebarNavigationRow(
   val currentOnDragActiveChange by rememberUpdatedState(onDragActiveChange)
   val pinStateDescription =
     pinned?.let { nativeString(if (it) "Pinned" else "Not pinned") }
-  var dragOffset by remember(destination) { mutableFloatStateOf(0f) }
-  var dragging by remember(destination) { mutableStateOf(false) }
-  var dragGeneration by remember(destination) { mutableLongStateOf(0L) }
+  var dragOffset by remember(entry.id) { mutableFloatStateOf(0f) }
+  var dragging by remember(entry.id) { mutableStateOf(false) }
+  var dragGeneration by remember(entry.id) { mutableLongStateOf(0L) }
   val visualDragging = dragging && dragGeneration == rowHost.generation
   val finishDrag = {
     dragOffset = 0f
@@ -280,7 +282,7 @@ internal fun SidebarNavigationRow(
           verticalAlignment = Alignment.CenterVertically,
         ) {
           Text(
-            text = destination.localizedLabel(),
+            text = entry.label,
             style = ClawTheme.type.body,
             modifier = Modifier.weight(1f),
             maxLines = 1,
@@ -293,13 +295,23 @@ internal fun SidebarNavigationRow(
               modifier = Modifier.size(18.dp),
             )
           }
+          if (onRemove != null) {
+            IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
+              Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = "左側から外す",
+                tint = palette.muted,
+                modifier = Modifier.size(16.dp),
+              )
+            }
+          }
         }
       },
       selected = selected,
       onClick = onClick,
       icon = {
         Icon(
-          imageVector = destination.icon,
+          imageVector = entry.icon,
           contentDescription = null,
           modifier = Modifier.size(20.dp),
         )
@@ -310,7 +322,7 @@ internal fun SidebarNavigationRow(
           .heightIn(min = 48.dp)
           .semantics {
             if (pinStateDescription != null) stateDescription = pinStateDescription
-          }.pointerInput(destination, thresholdPx) {
+          }.pointerInput(entry.id, thresholdPx) {
             detectSidebarRowDrag(
               rowHost = rowHost,
               onDragStart = { generation ->

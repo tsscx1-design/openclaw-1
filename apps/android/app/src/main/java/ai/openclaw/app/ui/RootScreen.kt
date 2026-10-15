@@ -23,6 +23,10 @@ fun RootScreen(viewModel: MainViewModel) {
       OnboardingFlow(viewModel = viewModel, modifier = Modifier.fillMaxSize())
     }
   } else {
-    ShellScreen(viewModel = viewModel, modifier = Modifier.fillMaxSize(), features = features)
+    androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxSize()) {
+      ShellScreen(viewModel = viewModel, modifier = Modifier.fillMaxSize(), features = features)
+      // 画面の中を歩いているミニキャラ（コンシェルジュ）
+      ConciergeOverlay(viewModel)
+    }
   }
 }

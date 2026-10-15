@@ -3,6 +3,8 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.AppearanceThemeFamily
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.defaultSidebarPageOrder
+import ai.openclaw.app.defaultSidebarVisiblePages
 import ai.openclaw.app.ui.design.clawColorsForTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -67,6 +69,49 @@ class SidebarShellLogicTest {
       initial,
       moveSidebarDestination(initial, destinationId = "missing", direction = 1),
     )
+  }
+
+  @Test
+  fun sidebarLabelsComeFromTheScreenTheyOpen() {
+    assertEquals(ShellDestination.Home.label, SidebarDestination.Work.localizedLabel())
+    assertEquals(ShellDestination.Chat.label, SidebarDestination.Home.localizedLabel())
+    assertEquals(ShellDestination.Sessions.label, SidebarDestination.Threads.localizedLabel())
+    assertEquals(ShellDestination.Settings.label, SidebarDestination.Settings.localizedLabel())
+    val labels = SidebarDestination.entries.map { it.localizedLabel() }
+    assertEquals("every sidebar label is distinct", labels.size, labels.toSet().size)
+  }
+
+  @Test
+  fun addedSettingsRoutesJoinTheOrderMoveAndCanBeRemoved() {
+    val (order, visible) = addSidebarRoute(defaultSidebarPageOrder, defaultSidebarVisiblePages, SettingsRoute.MediaStudio)
+
+    assertEquals(defaultSidebarPageOrder + "route:MediaStudio", order)
+    assertEquals(order, visible)
+    assertEquals(SettingsRoute.MediaStudio, orderedSidebarEntries(order).last().route)
+    assertEquals(
+      listOf("settings", "work", "home", "skills", "route:MediaStudio", "threads"),
+      moveSidebarDestination(order, destinationId = "route:MediaStudio", direction = -1),
+    )
+    assertEquals(order, addSidebarRoute(order, visible, SettingsRoute.MediaStudio).first)
+
+    val (removedOrder, removedVisible) = removeSidebarRoute(order, visible, SettingsRoute.MediaStudio)
+    assertEquals(defaultSidebarPageOrder, removedOrder)
+    assertEquals(defaultSidebarVisiblePages, removedVisible)
+  }
+
+  @Test
+  fun routesThatDuplicateOrCannotRunAreNeverOfferedOrKept() {
+    assertEquals(
+      defaultSidebarPageOrder,
+      orderedSidebarPageIds(listOf("route:Home", "route:Skills", "route:Desktop", "route:Nope")),
+    )
+    val offered = addableSidebarRoutes(defaultSidebarPageOrder).flatMap { it.second }
+    assertFalse(SettingsRoute.Home in offered)
+    assertFalse(SettingsRoute.Skills in offered)
+    assertFalse(SettingsRoute.Desktop in offered)
+    assertTrue(SettingsRoute.MediaStudio in offered)
+    val after = addableSidebarRoutes(defaultSidebarPageOrder + "route:MediaStudio").flatMap { it.second }
+    assertFalse(SettingsRoute.MediaStudio in after)
   }
 
   @Test

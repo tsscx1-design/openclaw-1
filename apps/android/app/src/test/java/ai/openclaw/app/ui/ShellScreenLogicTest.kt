@@ -99,6 +99,9 @@ class ShellScreenLogicTest {
     nav.selectTab(Tab.Settings)
     assertEquals(SettingsRoute.Home, nav.settingsRoute)
 
+    // Back goes to the screen visited before (the chat), then to Home.
+    nav.back()
+    assertEquals(Tab.Chat, nav.activeTab)
     nav.back()
     assertEquals(Tab.Overview, nav.activeTab)
   }
@@ -152,7 +155,41 @@ class ShellScreenLogicTest {
     nav.openDetailTab(Tab.Sessions)
     nav.selectTab(Tab.Chat)
     nav.back()
+    // Back goes to the screen visited before (the detail tab), not straight to Home.
+    assertEquals(Tab.Sessions, nav.activeTab)
+    nav.back()
+    assertEquals(Tab.Chat, nav.activeTab)
+    nav.back()
     assertEquals(Tab.Overview, nav.activeTab)
+  }
+
+  @Test
+  fun backWalksThroughTheTabsVisitedOneByOne() {
+    val nav = ShellNavigation()
+    nav.selectTab(Tab.Sessions)
+    nav.selectTab(Tab.SampleFactory)
+    nav.selectTab(Tab.Settings)
+
+    nav.back()
+    assertEquals(Tab.SampleFactory, nav.activeTab)
+    nav.back()
+    assertEquals(Tab.Sessions, nav.activeTab)
+    nav.back()
+    assertEquals(Tab.Overview, nav.activeTab)
+    nav.back()
+    assertEquals(Tab.Overview, nav.activeTab)
+  }
+
+  @Test
+  fun tabHistorySurvivesTheSaver() {
+    val nav = ShellNavigation()
+    nav.selectTab(Tab.Sessions)
+    nav.selectTab(Tab.SampleFactory)
+    val saveAnything = SaverScope { true }
+    val saved = with(ShellNavigation.Saver) { saveAnything.save(nav) }!!
+    val restored = ShellNavigation.Saver.restore(saved)!!
+    restored.back()
+    assertEquals(Tab.Sessions, restored.activeTab)
   }
 
   @Test
@@ -182,7 +219,7 @@ class ShellScreenLogicTest {
 
     val saveAnything = SaverScope { true }
     val saved = with(ShellNavigation.Saver) { saveAnything.save(returnToVoice) }!!
-    assertEquals(listOf("Chat", "Home", "", "false", "main", ""), saved)
+    assertEquals(listOf("Chat", "Home", "", "false", "main", "", ""), saved)
   }
 
   @Test

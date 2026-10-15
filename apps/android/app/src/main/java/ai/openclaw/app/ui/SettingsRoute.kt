@@ -40,6 +40,7 @@ internal enum class SettingsCategory(
   val defaultExpanded: Boolean,
 ) {
   // カテゴリ表示順序（enum順 = 画面表示順）。名前だけで中身が分かる7グループに整理。
+  Catalog(nativeText("📚 カタログ"), defaultExpanded = true),
   Partner(nativeText("🤖 パートナー"), defaultExpanded = true),
   Fun(nativeText("🎮 たのしむ"), defaultExpanded = true),
   AiModels(nativeText("🧠 AI・モデル"), defaultExpanded = false),
@@ -57,19 +58,25 @@ internal enum class SettingsRoute(
   // ── ルーティング専用（カテゴリなし） ──
   Home(nativeText("Settings"), Icons.Outlined.Settings, null),
 
+  // ── 📚 カタログ ──
+  ItemCatalog(nativeText("項目カタログ"), Icons.Default.Palette, SettingsCategory.Catalog),
+  CrieDev(nativeText("🛠 クリエ開発機能"), Icons.Default.Engineering, SettingsCategory.Partner),
+  MotionPoseCatalog(nativeText("モーション・体位カタログ"), Icons.Default.Palette, SettingsCategory.Catalog),
+
   // ── 🤖 AIパートナー ──
   PartnerManagement(nativeText("パートナー管理"), Icons.Default.Person, SettingsCategory.Partner),
   PartnerCharacterSheet(nativeText("キャラクターシート"), Icons.Default.Face, SettingsCategory.Partner),
   CoreAgentSettings(nativeText("人格・口調・SOUL設定"), Icons.Default.Psychology, SettingsCategory.Partner),
   GroupChat(nativeText("グループチャット"), Icons.Default.Groups, SettingsCategory.Partner),
   AvatarCustomize(nativeText("アバターカスタマイズ"), Icons.Default.Palette, SettingsCategory.Partner),
-  VoiceStudio(nativeText("声を作る"), Icons.Default.Mic, SettingsCategory.Partner),
+  VoiceStudio(nativeText("音声スタジオ"), Icons.Default.Mic, SettingsCategory.Partner),
   PartnerBond(nativeText("絆レベル & 実績"), Icons.Default.EmojiEvents, SettingsCategory.Fun),
   PartnerChat(nativeText("Partner Chat"), Icons.Default.Person, SettingsCategory.Partner),
 
   // ── 🧠 知識・記憶 ──
   MemoryInspector(nativeText("記憶 & RAG"), Icons.Default.Psychology, SettingsCategory.Partner),
   PartnerMemory(nativeText("AIメモリー管理"), Icons.Default.Storage, SettingsCategory.Partner),
+  PartnerKnowledge(nativeText("資料棚（PDF・Web）"), Icons.AutoMirrored.Filled.MenuBook, SettingsCategory.Partner),
   FeatureSettings(nativeText("Web検索 & 学習"), Icons.Default.Search, SettingsCategory.AiModels),
   PartnerDream(nativeText("AIの夢日記"), Icons.Default.Nightlight, SettingsCategory.Fun),
   MoodDashboard(nativeText("感情ダッシュボード"), Icons.Default.Favorite, SettingsCategory.Fun),
@@ -79,6 +86,11 @@ internal enum class SettingsRoute(
   Diary(nativeText("日記アシスタント"), Icons.AutoMirrored.Filled.MenuBook, SettingsCategory.Fun),
   PartnerAlbum(nativeText("写真アルバム"), Icons.Default.PhotoLibrary, SettingsCategory.Fun),
   MediaStudio(nativeText("生成スタジオ"), Icons.Default.Palette, SettingsCategory.Fun),
+  ComicStudio(nativeText("連載コミック & キャラ図鑑"), Icons.AutoMirrored.Filled.MenuBook, SettingsCategory.Fun),
+  FaceSwap(nativeText("顔入れ替え"), Icons.Default.Face, SettingsCategory.Fun),
+  SampleFactory(nativeText("サンプル画像製造"), Icons.Default.Palette, SettingsCategory.Fun),
+  IdolMaster(nativeText("マスターデータ"), Icons.Default.Groups, SettingsCategory.Fun),
+  TabCustomize(nativeText("タブの表示・並べ替え"), Icons.Default.Settings, SettingsCategory.Fun),
   MiniGame(nativeText("ミニゲーム"), Icons.Default.SportsEsports, SettingsCategory.Fun),
 
   // ── ⚙️ モデル・自動化 ──
@@ -118,6 +130,9 @@ internal enum class SettingsRoute(
   // ── 🔧 診断 ──
   PcHealth(nativeText("PCの状態"), Icons.Default.Thermostat, SettingsCategory.Info),
   Health(nativeText("Health"), Icons.Default.Settings, SettingsCategory.Info),
+
+  // ── 🛡️ セーフティ設定 ──
+  BlockedTermsAdmin(nativeText("🛡️ 禁止語句管理"), Icons.Default.Lock, SettingsCategory.Info),
   ;
 
   fun isAvailable(desktopObserveAvailable: Boolean): Boolean = this != Desktop || desktopObserveAvailable

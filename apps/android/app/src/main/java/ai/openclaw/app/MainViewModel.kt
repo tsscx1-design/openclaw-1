@@ -31,6 +31,7 @@ import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.systemagent.SystemAgentChatState
+import ai.openclaw.app.ui.GatewayConnectConfig
 import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
 import ai.openclaw.app.ui.SettingsRoute
@@ -594,6 +595,12 @@ class MainViewModel private constructor(
   val manualTls: StateFlow<Boolean> = prefs.manualTls
   val pairedGateways: StateFlow<List<GatewayRegistryEntry>> = prefs.gatewayRegistry.entries
   val activeGatewayStableId: StateFlow<String?> = prefs.gatewayRegistry.activeStableId
+
+  internal suspend fun loadHumanoidRigCorrection(gatewayId: String, ownerId: String, modelId: String): HumanoidRigCorrection? =
+    ensureRuntime().loadHumanoidRigCorrection(gatewayId, ownerId, modelId)
+
+  internal suspend fun saveHumanoidRigCorrection(gatewayId: String, ownerId: String, modelId: String, correction: HumanoidRigCorrection) =
+    ensureRuntime().saveHumanoidRigCorrection(gatewayId, ownerId, modelId, correction)
   val connectedGatewayStableIds: StateFlow<List<String>> = prefs.gatewayRegistry.connectedStableIds
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
@@ -868,6 +875,34 @@ class MainViewModel private constructor(
         runtime.connectSwitchingGateway(endpoint, isCurrent = connectionIsCurrent)
       }
     }
+  }
+
+  /**
+   * A build made with apps/android/gateway.local.properties already knows the user's own gateway.
+   * On the first start (nothing paired, onboarding not done) it connects with that address and token
+   * and skips setup, so the app works on any device it is installed on.
+   */
+  fun connectBundledGatewayIfNeeded() {
+    val host = BuildConfig.BUNDLED_GATEWAY_HOST
+    val token = BuildConfig.BUNDLED_GATEWAY_TOKEN
+    val port = BuildConfig.BUNDLED_GATEWAY_PORT
+    if (host.isBlank() || token.isBlank() || port <= 0) return
+    if (prefs.onboardingCompleted.value || prefs.gatewayRegistry.entries.value.isNotEmpty()) return
+    saveGatewayConfigAndConnect(
+      GatewayConnectPlan(
+        config =
+          GatewayConnectConfig(
+            host = host,
+            port = port,
+            tls = BuildConfig.BUNDLED_GATEWAY_TLS,
+            bootstrapToken = "",
+            token = token,
+            password = "",
+          ),
+        savedAuthAction = GatewaySavedAuthAction.REPLACE_SETUP,
+      ),
+    )
+    setOnboardingCompleted(true)
   }
 
   /** Marks onboarding complete and starts the runtime before UI observes connected-state flows. */
@@ -1375,13 +1410,6 @@ class MainViewModel private constructor(
 
   suspend fun runGatewayRpc(method: ai.openclaw.app.gateway.GatewayMethod, paramsJson: String? = null, timeoutMs: Long = 15_000): String {
     return ensureRuntime().runGatewayRpc(method, paramsJson, timeoutMs)
-  }
-
-  /** Swaps the group chat model back to the main model; outlives the closing group chat screen. */
-  fun leaveGroupChatModel() {
-    viewModelScope.launch {
-      runCatching { runGatewayRpc(ai.openclaw.app.gateway.GatewayMethod.GroupchatLeave, "{}", timeoutMs = 300_000) }
-    }
   }
 
   fun exportClientBackup(): String = prefs.exportBackupPackage()
@@ -2013,11 +2041,18 @@ class MainViewModel private constructor(
     return runGatewayRpc(GatewayMethod.PartnerChatGet, params.toString())
   }
 
-  suspend fun sendPartnerMessage(partnerId: String, message: String, thinkingMode: String = "auto"): String {
+  suspend fun sendPartnerMessage(
+    partnerId: String,
+    message: String,
+    thinkingMode: String = "auto",
+    imageBase64: String? = null,
+  ): String {
     val params = org.json.JSONObject().apply {
       put("partnerId", partnerId)
       put("message", message)
       put("thinkingMode", thinkingMode)
+      // A picture for partners that can read it (the character creator); JPEG, long side 768 px.
+      if (imageBase64 != null) put("imageBase64", imageBase64)
     }
     return runGatewayRpc(GatewayMethod.PartnerChatSend, params.toString(), timeoutMs = 120_000)
   }

@@ -13,7 +13,7 @@ const [tempRoot, stagedBundledPluginsRoot] = process.argv.slice(2);
 if (!tempRoot || !stagedBundledPluginsRoot) {
   throw new Error("Expected runtime and staging roots");
 }
-const roots = [tempRoot, `${tempRoot}-sibling`];
+const roots = [tempRoot, `${tempRoot}-sibling`] as const;
 await Promise.all(
   roots.map((root) =>
     stageQaLiveApiKeyProfiles({
@@ -24,7 +24,7 @@ await Promise.all(
     }),
   ),
 );
-const stores = roots.map((root) => {
+function openStores(root: string) {
   const stateDir = path.join(root, "state");
   const agentDir = path.join(stateDir, "agents", "qa", "agent");
   const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -38,7 +38,8 @@ const stores = roots.map((root) => {
     shared: openOpenClawStateDatabase({ env }),
     profiles: readQaAuthProfiles(agentDir),
   };
-});
+}
+const stores = [openStores(roots[0]), openStores(roots[1])] as const;
 const sibling = stores[1];
 const leases = () =>
   sibling.shared.db.prepare("SELECT * FROM agent_database_leases ORDER BY lease_id").all();

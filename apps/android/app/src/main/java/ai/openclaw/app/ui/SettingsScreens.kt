@@ -230,6 +230,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.PartnerManagement -> PartnerManagementScreen(
       viewModel = viewModel,
       onBack = onBack,
+      onOpenAudioStudio = { onOpenSettingsRoute(SettingsRoute.VoiceStudio) },
       onStartGroupChat = {
         onOpenSettingsRoute(SettingsRoute.GroupChat)
       },
@@ -258,66 +259,79 @@ internal fun SettingsDetailScreen(
       onOpenDream = { onOpenSettingsRoute(SettingsRoute.PartnerDream) },
       onOpenMood = { onOpenSettingsRoute(SettingsRoute.MoodDashboard) },
       onOpenDiary = { onOpenSettingsRoute(SettingsRoute.Diary) },
+      onOpenKnowledge = { onOpenSettingsRoute(SettingsRoute.PartnerKnowledge) },
     )
-    SettingsRoute.PartnerCharacterSheet -> PartnerCharacterSheetScreen(
-      viewModel = viewModel,
-      partnerId = rememberSettingsPartnerId(viewModel),
-      onBack = onBack,
-    )
+    SettingsRoute.PartnerCharacterSheet -> PartnerScopedScreen(viewModel) { pid ->
+      PartnerCharacterSheetScreen(viewModel = viewModel, partnerId = pid, onBack = onBack)
+    }
     SettingsRoute.GroupChat -> GroupChatScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.MemoryInspector -> MemoryInspectorScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.FeatureSettings -> FeatureSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.BackupRestore -> BackupRestoreScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.SpecialistJobs -> SpecialistJobsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.PcHealth -> PcHealthScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.VoiceStudio -> VoiceStudioScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.BlockedTermsAdmin -> BlockedTermsAdminScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.VoiceStudio -> AudioStudioScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.CoreAgentSettings -> CoreAgentSettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.PartnerMemory -> PartnerMemoryScreen(
-      viewModel = viewModel,
-      partnerId = rememberSettingsPartnerId(viewModel),
-      onBack = onBack,
-    )
-    SettingsRoute.PartnerBond -> PartnerBondScreen(
-      viewModel = viewModel,
-      partnerId = rememberSettingsPartnerId(viewModel),
-      onBack = onBack,
-    )
-    SettingsRoute.DailySettings -> DailySettingsScreen(
-      viewModel = viewModel,
-      partnerId = rememberSettingsPartnerId(viewModel),
-      onBack = onBack,
-    )
-    SettingsRoute.PartnerAlbum -> PartnerAlbumScreen(
-      viewModel = viewModel,
-      partnerId = rememberSettingsPartnerId(viewModel),
-      onBack = onBack,
-    )
-    SettingsRoute.MediaStudio -> MediaStudioScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.MiniGame -> MiniGameScreen(
-      viewModel = viewModel,
-      partnerId = rememberSettingsPartnerId(viewModel),
-      onBack = onBack,
-    )
-    SettingsRoute.PartnerDream -> PartnerDreamScreen(
-      viewModel = viewModel,
-      partnerId = rememberSettingsPartnerId(viewModel),
-      onBack = onBack,
-    )
-    SettingsRoute.MoodDashboard -> MoodDashboardScreen(
-      viewModel = viewModel,
-      partnerId = rememberSettingsPartnerId(viewModel),
-      onBack = onBack,
-    )
-    SettingsRoute.Diary -> DiaryScreen(
-      viewModel = viewModel,
-      partnerId = rememberSettingsPartnerId(viewModel),
-      onBack = onBack,
-    )
-    SettingsRoute.AvatarCustomize -> AvatarCustomizeScreen(
-      viewModel = viewModel,
-      partnerId = rememberSettingsPartnerId(viewModel),
-      onBack = onBack,
-    )
+    SettingsRoute.PartnerMemory -> PartnerScopedScreen(viewModel) { pid ->
+      PartnerMemoryScreen(viewModel = viewModel, partnerId = pid, onBack = onBack)
+    }
+    SettingsRoute.PartnerKnowledge -> PartnerScopedScreen(viewModel) { pid ->
+      PartnerKnowledgeScreen(viewModel = viewModel, partnerId = pid, onBack = onBack)
+    }
+    SettingsRoute.PartnerBond -> PartnerScopedScreen(viewModel) { pid ->
+      PartnerBondScreen(viewModel = viewModel, partnerId = pid, onBack = onBack)
+    }
+    SettingsRoute.DailySettings -> PartnerScopedScreen(viewModel) { pid ->
+      DailySettingsScreen(viewModel = viewModel, partnerId = pid, onBack = onBack)
+    }
+    SettingsRoute.PartnerAlbum -> PartnerScopedScreen(viewModel) { pid ->
+      PartnerAlbumScreen(viewModel = viewModel, partnerId = pid, onBack = onBack)
+    }
+    SettingsRoute.MediaStudio -> {
+      var mediaSubScreen by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf("main") }
+      when (mediaSubScreen) {
+        "modelSamples" -> ModelSampleGallery(viewModel = viewModel, onBack = { mediaSubScreen = "main" })
+        // 体位の見本は、サンプル画像製造の「モーション用」ページ（体位は全部ここに並ぶ。作る・全画面・保存ができる）
+        "poseSamples"  -> SampleFactoryScreen(viewModel = viewModel, onBack = { mediaSubScreen = "main" }, initialPage = 1)
+        else -> MediaStudioScreen(
+          viewModel          = viewModel,
+          onBack             = onBack,
+          onOpenComics       = { onOpenSettingsRoute(SettingsRoute.ComicStudio) },
+          onOpenModelSamples = { mediaSubScreen = "modelSamples" },
+          onOpenPoseSamples  = { mediaSubScreen = "poseSamples" },
+        )
+      }
+    }
+    SettingsRoute.ComicStudio -> ComicStudioScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.FaceSwap -> FaceSwapScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.SampleFactory -> SampleFactoryScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.IdolMaster -> IdolMasterScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.ItemCatalog -> ItemCatalogScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.CrieDev -> CrieDevScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.MotionPoseCatalog -> MotionCatalogScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.TabCustomize -> {
+      // 開いたらすぐ、タブのカスタマイズ画面を出して、設定の一覧へ戻る
+      androidx.compose.runtime.LaunchedEffect(Unit) {
+        TabCustomizeBus.requested = true
+        onBack()
+      }
+    }
+    SettingsRoute.MiniGame -> PartnerScopedScreen(viewModel) { pid ->
+      MiniGameScreen(viewModel = viewModel, partnerId = pid, onBack = onBack)
+    }
+    SettingsRoute.PartnerDream -> PartnerScopedScreen(viewModel) { pid ->
+      PartnerDreamScreen(viewModel = viewModel, partnerId = pid, onBack = onBack)
+    }
+    SettingsRoute.MoodDashboard -> PartnerScopedScreen(viewModel) { pid ->
+      MoodDashboardScreen(viewModel = viewModel, partnerId = pid, onBack = onBack)
+    }
+    SettingsRoute.Diary -> PartnerScopedScreen(viewModel) { pid ->
+      DiaryScreen(viewModel = viewModel, partnerId = pid, onBack = onBack)
+    }
+    SettingsRoute.AvatarCustomize -> PartnerScopedScreen(viewModel) { pid ->
+      AvatarCustomizeScreen(viewModel = viewModel, partnerId = pid, onBack = onBack)
+    }
     SettingsRoute.OnDeviceGguf -> OnDeviceGgufScreen(
       viewModel = viewModel,
       onBack = onBack,

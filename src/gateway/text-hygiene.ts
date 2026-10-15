@@ -65,7 +65,10 @@ export function cleanGeneratedText(raw: string, maxChars = 360): string {
 }
 
 function normalize(text: string): string {
-  return text.replace(/[\s、。！？!?…「」『』（）()～〜♪❤️✨💕😅]/gu, "");
+  return text.replace(
+    /[\s\u3001\u3002\uff01\uff1f!?…\u300c\u300d\u300e\u300f\uff08\uff09()~\u301c\u266a\u2764\ufe0f\u2728\ud83d\udc95\ud83d\ude05]/gu,
+    "",
+  );
 }
 
 /** True when `reply` mostly repeats something already said (a verbatim echo of another speaker). */

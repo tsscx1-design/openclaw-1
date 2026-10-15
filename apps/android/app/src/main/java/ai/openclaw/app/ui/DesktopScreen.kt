@@ -17,12 +17,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.DesktopWindows
+import androidx.compose.material.icons.filled.Tune
+import ai.openclaw.app.ui.design.ClawIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -42,6 +47,22 @@ internal fun DesktopScreen(
   ClawScaffold(
     contentPadding = PaddingValues(start = ClawTheme.spacing.lg, top = 14.dp, end = ClawTheme.spacing.lg, bottom = 6.dp),
   ) {
+    // ③ ホームカスタマイズダイアログ
+    val context = LocalContext.current
+    var showHomeCustomize by androidx.compose.runtime.remember { mutableStateOf(false) }
+    if (showHomeCustomize) {
+      HomeCustomizeDialog(
+        shortcuts = loadHomeShortcuts(context),
+        panels    = loadHomePanels(context),
+        onSave = { updatedShortcuts, updatedPanels ->
+          saveHomeShortcuts(context, updatedShortcuts)
+          saveHomePanels(context, updatedPanels)
+          showHomeCustomize = false
+        },
+        onDismiss = { showHomeCustomize = false },
+      )
+    }
+
     // The viewer's keyboard affordance opens the soft keyboard over the canvas; without
     // imePadding it would also cover the viewer's own touch toolbar.
     Column(modifier = Modifier.fillMaxSize().imePadding(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -67,6 +88,11 @@ internal fun DesktopScreen(
           imageVector = Icons.Outlined.DesktopWindows,
           contentDescription = null,
           tint = ClawTheme.colors.textMuted,
+        )
+        ClawIconButton(
+          icon = Icons.Default.Tune,
+          contentDescription = "ホームをカスタマイズ",
+          onClick = { showHomeCustomize = true },
         )
       }
       Box(modifier = Modifier.fillMaxWidth().weight(1f)) {

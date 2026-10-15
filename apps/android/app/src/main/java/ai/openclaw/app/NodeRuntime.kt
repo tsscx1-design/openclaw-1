@@ -889,6 +889,18 @@ class NodeRuntime private constructor(
   private val chatTranscriptCache = chatStores.transcriptCache
   private val chatCommandOutbox = chatStores.commandOutbox
   private val clientDatabases = chatStores.clientDatabases
+
+  internal suspend fun loadHumanoidRigCorrection(gatewayId: String, ownerId: String, modelId: String): HumanoidRigCorrection? {
+    val key = HumanoidRigCorrection.storageKey(gatewayId, ownerId, modelId)
+    return clientDatabases.clientStateDatabase().controlDao().metadataValue(key)?.let(HumanoidRigCorrection::decode)
+  }
+
+  internal suspend fun saveHumanoidRigCorrection(gatewayId: String, ownerId: String, modelId: String, correction: HumanoidRigCorrection) {
+    val key = HumanoidRigCorrection.storageKey(gatewayId, ownerId, modelId)
+    clientDatabases.clientStateDatabase().controlDao().upsertMetadata(
+      ai.openclaw.app.chat.ClientStateMetadataEntity(key, correction.encode()),
+    )
+  }
   private val externalTranscriptCache = chatStores.externalTranscriptCache
   private val screenshotRequester by lazy { AndroidScreenshotFixture.createRequester() }
   private val gatewayAuthLifecycleLock = Any()
@@ -5513,6 +5525,9 @@ class NodeRuntime private constructor(
   ) {
     if (event == "update.available") {
       _gatewayUpdateAvailable.value = parseGatewayUpdateAvailable(payloadJson)
+    }
+    if (event == "partner.chat.delta") {
+      ai.openclaw.app.ui.PartnerChatStream.publish(payloadJson)
     }
     if (event == GatewayEvent.VoicewakeChanged.rawValue) {
       applyVoiceWakeWords(payloadJson)

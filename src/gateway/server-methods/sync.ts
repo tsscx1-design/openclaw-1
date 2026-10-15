@@ -254,7 +254,7 @@ export const syncHandlers: GatewayRequestHandlers = {
 
       respond(true, syncResult, undefined);
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, `Sync failed: ${String(e)}`));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, `Sync failed: ${String(e)}`));
     }
   },
 };

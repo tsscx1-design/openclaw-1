@@ -158,6 +158,7 @@ class MainActivity : AppCompatActivity() {
     if (initializedViewModel != null) return
     initializedViewModel = readyViewModel
     readyViewModel.setForeground(foreground)
+    readyViewModel.connectBundledGatewayIfNeeded()
     startViewModelCollectors(readyViewModel)
     if (!readyViewModel.claimInitialIntentRouting()) {
       pendingIntentRouter.discardInitialIntent()
@@ -230,6 +231,8 @@ class MainActivity : AppCompatActivity() {
     intent: Intent?,
   ) {
     if (intent?.isShareLaunchIntent() == true) {
+      // The fan book member page may be waiting for a shared picture: then it goes there, not to the chat.
+      if (ai.openclaw.app.ui.FanBookShareInbox.tryCapture(intent)) return
       viewModel.handleShareLaunchIntent(intent)
       return
     }

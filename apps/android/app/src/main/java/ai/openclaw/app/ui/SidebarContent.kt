@@ -11,6 +11,11 @@ import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.defaultSidebarPageOrder
 import ai.openclaw.app.defaultSidebarVisiblePages
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.resolveNativeText
+import ai.openclaw.app.isKnownSidebarPageId
+import ai.openclaw.app.isSidebarAddableRoute
+import ai.openclaw.app.sidebarRouteId
+import ai.openclaw.app.sidebarRouteOrNull
 import ai.openclaw.app.operatorScopesAllowWrite
 import ai.openclaw.app.ui.design.ClawColors
 import ai.openclaw.app.ui.design.ClawTheme
@@ -46,7 +51,6 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Folder
@@ -123,26 +127,69 @@ internal enum class SidebarDestination(
   val stableId: String,
   val icon: ImageVector,
 ) {
-  Settings(stableId = "settings", icon = Icons.Outlined.Settings),
-  Work(stableId = "work", icon = Icons.Outlined.BarChart),
-  Home(stableId = "home", icon = Icons.Outlined.ChatBubbleOutline),
+  // stableId は保存済みの並び順と互換のため変えない。名前・アイコンは開いた先の画面と下部バー(ShellDestination)に合わせる。
+  Settings(stableId = "settings", icon = ShellDestination.Settings.icon),
+  Work(stableId = "work", icon = ShellDestination.Home.icon),
+  Home(stableId = "home", icon = ShellDestination.Chat.icon),
   Skills(stableId = "skills", icon = Icons.Outlined.Build),
-  Threads(stableId = "threads", icon = Icons.Outlined.Description),
+  Threads(stableId = "threads", icon = ShellDestination.Sessions.icon),
 }
 
+/** 左側の項目名。開く画面の名前と同じ出所から決め、ユーザーが自由に変えることはできない。 */
 internal fun SidebarDestination.localizedLabel(): String =
   when (this) {
-    SidebarDestination.Settings -> nativeString("Settings")
-    SidebarDestination.Work -> nativeString("Work")
-    SidebarDestination.Home -> nativeString("Home")
-    SidebarDestination.Skills -> nativeString("Skills")
-    SidebarDestination.Threads -> nativeString("Threads")
+    SidebarDestination.Settings -> ShellDestination.Settings.label
+    SidebarDestination.Work -> ShellDestination.Home.label
+    SidebarDestination.Home -> ShellDestination.Chat.label
+    SidebarDestination.Skills -> "スキル"
+    SidebarDestination.Threads -> ShellDestination.Sessions.label
   }
+
+/** 左サイドバーの1行。固定の5項目か、ユーザーが足した「設定の項目」のどちらか。 */
+internal data class SidebarEntry(
+  val id: String,
+  val label: String,
+  val icon: ImageVector,
+  val destination: SidebarDestination?,
+  val route: SettingsRoute?,
+)
+
+internal fun SidebarDestination.toSidebarEntry(): SidebarEntry =
+  SidebarEntry(id = stableId, label = localizedLabel(), icon = icon, destination = this, route = null)
+
+internal fun SettingsRoute.toSidebarEntry(): SidebarEntry =
+  SidebarEntry(id = sidebarRouteId(this), label = title.resolveNativeText(), icon = icon, destination = null, route = this)
+
+/** 保存された並び順を、既知の項目だけにして重複を除き、足りない固定項目を末尾に補う。 */
+internal fun orderedSidebarPageIds(pageIds: List<String>): List<String> {
+  val supplied = pageIds.filter(::isKnownSidebarPageId).distinct()
+  return supplied + defaultSidebarPageOrder.filterNot(supplied::contains)
+}
+
+internal fun orderedSidebarEntries(pageIds: List<String>): List<SidebarEntry> {
+  val byId = SidebarDestination.entries.associateBy(SidebarDestination::stableId)
+  return orderedSidebarPageIds(pageIds).mapNotNull { id ->
+    byId[id]?.toSidebarEntry() ?: sidebarRouteOrNull(id)?.toSidebarEntry()
+  }
+}
+
+/** 足せる設定の項目（まだ左側に無いもの）をカテゴリごとに。 */
+internal fun addableSidebarRoutes(pageIds: List<String>): List<Pair<SettingsCategory, List<SettingsRoute>>> {
+  val present = pageIds.toSet()
+  return SettingsCategory.entries.mapNotNull { category ->
+    val routes =
+      SettingsRoute.entries.filter {
+        it.category == category && isSidebarAddableRoute(it) && sidebarRouteId(it) !in present
+      }
+    if (routes.isEmpty()) null else category to routes
+  }
+}
 
 private enum class SidebarPagesMenuMode {
   Closed,
   Navigate,
   Edit,
+  AddRoute,
 }
 
 internal fun orderedSidebarDestinations(pageIds: List<String>): List<SidebarDestination> {
@@ -157,7 +204,7 @@ internal fun moveSidebarDestination(
   direction: Int,
   visiblePageIds: Set<String>? = null,
 ): List<String> {
-  val ordered = orderedSidebarDestinations(pageIds).map(SidebarDestination::stableId).toMutableList()
+  val ordered = orderedSidebarPageIds(pageIds).toMutableList()
   if (direction == 0) return ordered
   val visibleOrder = ordered.filter { visiblePageIds == null || it in visiblePageIds }
   val fromIndex = visibleOrder.indexOf(destinationId)
@@ -172,16 +219,42 @@ internal fun updateSidebarDestinationVisibility(
   visibleIds: List<String>,
   destination: SidebarDestination,
   visible: Boolean,
+): List<String> = updateSidebarPageVisibility(visibleIds, destination.stableId, visible)
+
+/** 表示する項目の一覧を、並び順に沿って返す。最後の1つは隠せない。 */
+internal fun updateSidebarPageVisibility(
+  visibleIds: List<String>,
+  pageId: String,
+  visible: Boolean,
+  pageOrder: List<String> = defaultSidebarPageOrder,
 ): List<String> {
   val current = visibleIds.toSet()
-  if (!visible && destination.stableId in current && current.size == 1) return visibleIds
-  val updated =
-    if (visible) {
-      current + destination.stableId
-    } else {
-      current - destination.stableId
-    }
-  return SidebarDestination.entries.map(SidebarDestination::stableId).filter(updated::contains)
+  if (!visible && pageId in current && current.size == 1) return visibleIds
+  val updated = if (visible) current + pageId else current - pageId
+  return orderedSidebarPageIds(pageOrder).filter(updated::contains)
+}
+
+/** 設定の項目を左側に足す。並び順の末尾に入れて表示にする。 */
+internal fun addSidebarRoute(
+  pageOrder: List<String>,
+  visibleIds: List<String>,
+  route: SettingsRoute,
+): Pair<List<String>, List<String>> {
+  val id = sidebarRouteId(route)
+  val ordered = orderedSidebarPageIds(pageOrder).let { if (id in it) it else it + id }
+  return ordered to updateSidebarPageVisibility(visibleIds, id, visible = true, pageOrder = ordered)
+}
+
+/** 足した設定の項目を左側から外す（固定の5項目は外せず、隠すだけ）。 */
+internal fun removeSidebarRoute(
+  pageOrder: List<String>,
+  visibleIds: List<String>,
+  route: SettingsRoute,
+): Pair<List<String>, List<String>> {
+  val id = sidebarRouteId(route)
+  val ordered = orderedSidebarPageIds(pageOrder) - id
+  val visible = (visibleIds - id).ifEmpty { defaultSidebarVisiblePages }
+  return ordered to visible
 }
 
 private val Int.sign: Int
@@ -425,6 +498,9 @@ internal fun OpenClawSidebar(
   visible: Boolean,
   showCloseButton: Boolean,
   onClose: () -> Unit,
+  /** 折りたたみ画面で、左のサイドバーを隠す／常に出すを切り替える（null なら出さない）。 */
+  onToggleFoldSidebar: (() -> Unit)? = null,
+  toggleFoldSidebarLabel: String = "",
   onDragActiveChange: (Boolean) -> Unit,
   onNewSession: () -> Unit,
   onSelectAgent: (String) -> Unit,
@@ -432,6 +508,8 @@ internal fun OpenClawSidebar(
   onSelectCatalogSession: (SessionCatalogEntry) -> Unit,
   onCreateCatalogSession: (String) -> Unit,
   onSelectDestination: (SidebarDestination) -> Unit,
+  activeRoute: SettingsRoute? = null,
+  onSelectRoute: (SettingsRoute) -> Unit = {},
   rowHostBand: IntRect? = null,
 ) {
   val palette = sidebarPalette()
@@ -487,8 +565,14 @@ internal fun OpenClawSidebar(
     )
   val pinnedSessions = recentPresentation.pinned
   val recentSections = recentPresentation.recentSections
-  val orderedPages = orderedSidebarDestinations(pageOrder)
+  val orderedPages = orderedSidebarEntries(pageOrder)
   val visiblePageIdSet = visiblePageIds.toSet()
+  // 足した設定の項目を開いている間は、その項目を選択表示にし、固定の「設定」は選択表示にしない。
+  val activeEntryId =
+    activeRoute?.let(::sidebarRouteId)?.takeIf { it in visiblePageIdSet } ?: activeDestination?.stableId
+  val selectEntry: (SidebarEntry) -> Unit = { entry ->
+    entry.destination?.let(onSelectDestination) ?: entry.route?.let(onSelectRoute)
+  }
   val connectionLabel = gatewayStatusLabel(connection)
   val setSessionPinned: (String, String?, Boolean) -> Unit = { key, ownerAgentId, pinned ->
     scope.launch {
@@ -602,6 +686,11 @@ internal fun OpenClawSidebar(
           )
         }
       }
+      if (onToggleFoldSidebar != null) {
+        androidx.compose.material3.TextButton(onClick = onToggleFoldSidebar, modifier = Modifier.testTag("sidebar-fold-toggle")) {
+          Text(text = toggleFoldSidebarLabel, color = palette.text, style = ClawTheme.type.captionSmall)
+        }
+      }
       if (showCloseButton) {
         IconButton(onClick = onClose, modifier = Modifier.size(48.dp).testTag("sidebar-close")) {
           Icon(
@@ -680,28 +769,40 @@ internal fun OpenClawSidebar(
             menuMode = pagesMenuMode,
             destinations = orderedPages,
             visiblePageIds = visiblePageIdSet,
-            activeDestination = activeDestination,
+            activeEntryId = activeEntryId,
             palette = palette,
+            addableRoutes = addableSidebarRoutes(pageOrder),
             onToggleExpanded = { pagesExpanded = !pagesExpanded },
             onMenuModeChange = { pagesMenuMode = it },
-            onSelectDestination = onSelectDestination,
-            onVisibilityChange = { destination, visible ->
+            onSelectDestination = selectEntry,
+            onVisibilityChange = { entry, visible ->
               viewModel.setSidebarVisiblePages(
-                updateSidebarDestinationVisibility(
+                updateSidebarPageVisibility(
                   visibleIds = visiblePageIds,
-                  destination = destination,
+                  pageId = entry.id,
                   visible = visible,
+                  pageOrder = pageOrder,
                 ),
               )
             },
-            onMove = { destination, direction ->
+            onMove = { entry, direction ->
               viewModel.setSidebarPageOrder(
                 moveSidebarDestination(
                   pageIds = pageOrder,
-                  destinationId = destination.stableId,
+                  destinationId = entry.id,
                   direction = direction,
                 ),
               )
+            },
+            onAddRoute = { route ->
+              val (order, visible) = addSidebarRoute(pageOrder, visiblePageIds, route)
+              viewModel.setSidebarPageOrder(order)
+              viewModel.setSidebarVisiblePages(visible)
+            },
+            onRemoveRoute = { route ->
+              val (order, visible) = removeSidebarRoute(pageOrder, visiblePageIds, route)
+              viewModel.setSidebarPageOrder(order)
+              viewModel.setSidebarVisiblePages(visible)
             },
             onReset = {
               viewModel.setSidebarPageOrder(defaultSidebarPageOrder)
@@ -710,19 +811,19 @@ internal fun OpenClawSidebar(
             onDragActiveChange = onDragActiveChange,
           )
           if (pagesExpanded) {
-            orderedPages.filter { it.stableId in visiblePageIdSet }.forEach { destination ->
-              key(destination.stableId) {
+            orderedPages.filter { it.id in visiblePageIdSet }.forEach { entry ->
+              key(entry.id) {
                 SidebarNavigationRow(
-                  destination = destination,
+                  entry = entry,
                   rowHost = rowHost,
-                  selected = destination == activeDestination,
+                  selected = entry.id == activeEntryId,
                   palette = palette,
-                  onClick = { onSelectDestination(destination) },
+                  onClick = { selectEntry(entry) },
                   onMove = { direction ->
                     viewModel.setSidebarPageOrder(
                       moveSidebarDestination(
                         pageIds = pageOrder,
-                        destinationId = destination.stableId,
+                        destinationId = entry.id,
                         direction = direction,
                         visiblePageIds = visiblePageIdSet,
                       ),
@@ -961,15 +1062,18 @@ private fun SidebarPagesHeader(
   rowHost: SidebarRowHost,
   expanded: Boolean,
   menuMode: SidebarPagesMenuMode,
-  destinations: List<SidebarDestination>,
+  destinations: List<SidebarEntry>,
   visiblePageIds: Set<String>,
-  activeDestination: SidebarDestination?,
+  activeEntryId: String?,
   palette: SidebarPalette,
+  addableRoutes: List<Pair<SettingsCategory, List<SettingsRoute>>>,
   onToggleExpanded: () -> Unit,
   onMenuModeChange: (SidebarPagesMenuMode) -> Unit,
-  onSelectDestination: (SidebarDestination) -> Unit,
-  onVisibilityChange: (SidebarDestination, Boolean) -> Unit,
-  onMove: (SidebarDestination, Int) -> Unit,
+  onSelectDestination: (SidebarEntry) -> Unit,
+  onVisibilityChange: (SidebarEntry, Boolean) -> Unit,
+  onMove: (SidebarEntry, Int) -> Unit,
+  onAddRoute: (SettingsRoute) -> Unit,
+  onRemoveRoute: (SettingsRoute) -> Unit,
   onReset: () -> Unit,
   onDragActiveChange: (Boolean) -> Unit,
 ) {
@@ -1032,7 +1136,7 @@ private fun SidebarPagesHeader(
           SidebarPagesMenuMode.Navigate -> {
             destinations.forEach { destination ->
               DropdownMenuItem(
-                text = { Text(destination.localizedLabel(), maxLines = 1) },
+                text = { Text(destination.label, maxLines = 1) },
                 leadingIcon = {
                   Icon(
                     imageVector = destination.icon,
@@ -1042,7 +1146,7 @@ private fun SidebarPagesHeader(
                   )
                 },
                 trailingIcon = {
-                  if (destination == activeDestination) {
+                  if (destination.id == activeEntryId) {
                     Icon(
                       painter = painterResource(R.drawable.ic_web_check),
                       contentDescription = nativeString("Selected"),
@@ -1084,10 +1188,10 @@ private fun SidebarPagesHeader(
               modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             )
             destinations.forEach { destination ->
-              key(destination.stableId) {
-                val visible = destination.stableId in visiblePageIds
+              key(destination.id) {
+                val visible = destination.id in visiblePageIds
                 SidebarNavigationRow(
-                  destination = destination,
+                  entry = destination,
                   rowHost = rowHost,
                   selected = false,
                   pinned = visible,
@@ -1095,10 +1199,23 @@ private fun SidebarPagesHeader(
                   onClick = { onVisibilityChange(destination, !visible) },
                   onMove = { direction -> onMove(destination, direction) },
                   onDragActiveChange = onDragActiveChange,
+                  onRemove = destination.route?.let { route -> { onRemoveRoute(route) } },
                 )
               }
             }
             HorizontalDivider(color = palette.hairline)
+            DropdownMenuItem(
+              text = { Text("設定の項目を追加", maxLines = 1) },
+              leadingIcon = {
+                Icon(
+                  imageVector = Icons.Default.Add,
+                  contentDescription = null,
+                  tint = palette.text,
+                  modifier = Modifier.size(18.dp),
+                )
+              },
+              onClick = { onMenuModeChange(SidebarPagesMenuMode.AddRoute) },
+            )
             DropdownMenuItem(
               text = { Text(nativeString("Reset pinned items"), maxLines = 1) },
               leadingIcon = {
@@ -1110,6 +1227,57 @@ private fun SidebarPagesHeader(
                 )
               },
               onClick = onReset,
+            )
+          }
+
+          SidebarPagesMenuMode.AddRoute -> {
+            Text(
+              text = "追加する設定の項目",
+              style =
+                ClawTheme.type.caption.copy(
+                  fontWeight = FontWeight.SemiBold,
+                  letterSpacing = 0.8.sp,
+                ),
+              color = palette.muted,
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+            if (addableRoutes.isEmpty()) {
+              Text(
+                text = "追加できる項目はもうありません",
+                style = ClawTheme.type.caption,
+                color = palette.muted,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+              )
+            }
+            addableRoutes.forEach { (category, routes) ->
+              Text(
+                text = category.title.resolveNativeText(),
+                style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Medium),
+                color = palette.muted,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+              )
+              routes.forEach { route ->
+                DropdownMenuItem(
+                  text = { Text(route.title.resolveNativeText(), maxLines = 1) },
+                  leadingIcon = {
+                    Icon(
+                      imageVector = route.icon,
+                      contentDescription = null,
+                      tint = palette.text,
+                      modifier = Modifier.size(18.dp),
+                    )
+                  },
+                  onClick = {
+                    onAddRoute(route)
+                    onMenuModeChange(SidebarPagesMenuMode.Edit)
+                  },
+                )
+              }
+            }
+            HorizontalDivider(color = palette.hairline)
+            DropdownMenuItem(
+              text = { Text("戻る", maxLines = 1) },
+              onClick = { onMenuModeChange(SidebarPagesMenuMode.Edit) },
             )
           }
         }

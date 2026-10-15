@@ -10,6 +10,7 @@ import {
   writeConfigFile,
 } from "../../config/io.runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { forgetPartnerModeState } from "../group-chat-model.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const ollamaManager = new OllamaManager();
@@ -547,7 +548,7 @@ export const ollamaHandlers: GatewayRequestHandlers = {
         "ollama/qwen2.5:latest";
       respond(true, { models, currentModel: currentPrimary }, undefined);
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(e)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
     }
   },
 
@@ -595,6 +596,9 @@ export const ollamaHandlers: GatewayRequestHandlers = {
     // Bonsai/ローカルGGUFモデルの場合、安全にプロセス切替＆思考バジェット設定を行う
     if (isBonsaiModel) {
       try {
+        // The model picked here becomes the agent's; a partner chat must not restore the one it
+        // replaced before (group-chat-model.ts).
+        await forgetPartnerModeState();
         const targetFile = localModel
           ? localModelPath(localModel)
           : (BONSAI_MODEL_FILES[cleanModel.toLowerCase()] ?? DEFAULT_BONSAI_MODEL_FILE);
@@ -711,7 +715,7 @@ export const ollamaHandlers: GatewayRequestHandlers = {
         undefined,
       );
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(e)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
     }
   },
   "ollama.pull": async ({ params, respond }) => {
@@ -792,7 +796,7 @@ export const ollamaHandlers: GatewayRequestHandlers = {
 
       respond(true, { status: "pulling", name: cleanName }, undefined);
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(e)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
     }
   },
 
@@ -827,7 +831,7 @@ export const ollamaHandlers: GatewayRequestHandlers = {
       await ollamaManager.stopModel(modelName);
       respond(true, { status: "stopped", name: modelName }, undefined);
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(e)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
     }
   },
 
@@ -867,7 +871,7 @@ export const ollamaHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INTERNAL_ERROR, `Failed to delete model ${cleanName}: ${e}`),
+        errorShape(ErrorCodes.UNAVAILABLE, `Failed to delete model ${cleanName}: ${e}`),
       );
     }
   },
@@ -892,7 +896,7 @@ export const ollamaHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INTERNAL_ERROR, `Hugging Face search failed: ${e}`),
+        errorShape(ErrorCodes.UNAVAILABLE, `Hugging Face search failed: ${e}`),
       );
     }
   },
@@ -903,7 +907,7 @@ export const ollamaHandlers: GatewayRequestHandlers = {
       const files = await ollamaManager.scanLocalGgufFiles(p.customDirs);
       respond(true, { files }, undefined);
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, `GGUF scan failed: ${e}`));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, `GGUF scan failed: ${e}`));
     }
   },
 
@@ -992,7 +996,7 @@ export const ollamaHandlers: GatewayRequestHandlers = {
       const tuning = await ollamaManager.optimizeGgufOptions(p);
       respond(true, { ok: true, payload: tuning, ...tuning }, undefined);
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(err)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
     }
   },
 
@@ -1024,7 +1028,7 @@ export const ollamaHandlers: GatewayRequestHandlers = {
 
       respond(true, { ok: true, payload: result, ...result }, undefined);
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(err)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
     }
   },
 
@@ -1113,7 +1117,7 @@ export const ollamaHandlers: GatewayRequestHandlers = {
         undefined,
       );
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(err)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
     }
   },
 
@@ -1167,7 +1171,7 @@ export const ollamaHandlers: GatewayRequestHandlers = {
         undefined,
       );
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(err)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
     }
   },
 
@@ -1219,7 +1223,7 @@ export const ollamaHandlers: GatewayRequestHandlers = {
         undefined,
       );
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(err)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
     }
   },
 };

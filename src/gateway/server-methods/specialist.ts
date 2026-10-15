@@ -32,7 +32,7 @@ export const specialistHandlers: GatewayRequestHandlers = {
       const status = await getSpecialistSquadStatus();
       respond(true, { squad: status }, undefined);
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(e)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
     }
   },
 
@@ -57,7 +57,7 @@ export const specialistHandlers: GatewayRequestHandlers = {
         respond(true, result, undefined);
       }
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(e)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
     }
   },
 
@@ -82,7 +82,7 @@ export const specialistHandlers: GatewayRequestHandlers = {
         respond(true, result, undefined);
       }
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(e)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
     }
   },
 
@@ -121,7 +121,7 @@ export const specialistHandlers: GatewayRequestHandlers = {
 
       respond(true, result, undefined);
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(e)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
     }
   },
 
@@ -132,7 +132,7 @@ export const specialistHandlers: GatewayRequestHandlers = {
     try {
       respond(true, { workers: SPECIALIST_WORKERS }, undefined);
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(e)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
     }
   },
 };

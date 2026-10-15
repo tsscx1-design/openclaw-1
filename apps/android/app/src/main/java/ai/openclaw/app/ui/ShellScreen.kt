@@ -42,6 +42,8 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.border
 import ai.openclaw.app.ui.design.OpenClawMascot
@@ -66,6 +68,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -119,6 +122,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -140,6 +144,7 @@ internal enum class Tab {
   ProvidersModels,
   Files,
   Dashboard,
+  SampleFactory,
 }
 
 private val shellContentInsets: WindowInsets
@@ -167,13 +172,37 @@ fun ShellScreen(
   ClawDesignTheme(dark = shellDark, family = appearanceThemeFamily, accentArgb = appearanceAccentArgb ?: gatewayAccentArgb) {
     val nav = rememberSaveable(saver = ShellNavigation.Saver) { ShellNavigation() }
     val settingsListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
+    // コンシェルジュ（ミニキャラ）が「連れて行く」と言った画面を開く
+    androidx.compose.runtime.LaunchedEffect(ConciergeBus.pendingGo) {
+      val go = ConciergeBus.pendingGo ?: return@LaunchedEffect
+      ConciergeBus.pendingGo = null
+      when {
+        go.startsWith("route:") -> SettingsRoute.entries.firstOrNull { it.name == go.removePrefix("route:") }?.let { nav.openSettingsRoute(it) }
+        go.startsWith("deep:") -> ShellDeepLink.find(go.removePrefix("deep:"))?.let {
+          ShellDeepLink.last = it.id
+          ShellDeepLink.pending = it.id
+          nav.openSettingsRoute(it.route)
+        }
+        go.startsWith("tab:") -> Tab.entries.firstOrNull { it.name == go.removePrefix("tab:") }?.let { nav.selectTab(it) }
+      }
+    }
     var commandOpen by rememberSaveable { mutableStateOf(false) }
     var conversationScreenWasActive by rememberSaveable { mutableStateOf(false) }
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
+    // 折りたたみ画面を開いたときの左のサイドバー：「◀ 隠す」で隠し、ハンバーガーで出し入れ、「📌 常に表示」で戻す
+    val shellContext = androidx.compose.ui.platform.LocalContext.current
+    var foldSidebarHidden by rememberSaveable {
+      mutableStateOf(shellContext.getSharedPreferences("shell_layout", android.content.Context.MODE_PRIVATE).getBoolean("fold_sidebar_hidden", false))
+    }
+    val setFoldSidebarHidden: (Boolean) -> Unit = { hidden ->
+      foldSidebarHidden = hidden
+      shellContext.getSharedPreferences("shell_layout", android.content.Context.MODE_PRIVATE).edit().putBoolean("fold_sidebar_hidden", hidden).apply()
+    }
+    androidx.compose.runtime.LaunchedEffect(Unit) { FoldStageBus.load(shellContext) }
     FoldAwareContent(
       features = features,
       modifier = modifier.background(ClawTheme.colors.canvas),
-      bookPanesEnabled = !commandOpen && pendingTrust == null,
+      bookPanesEnabled = !commandOpen && pendingTrust == null && !foldSidebarHidden,
       tabletopEnabled = nav.activeTab == Tab.Chat && !commandOpen && pendingTrust == null,
     ) { foldBounds ->
       val bookPanes = foldBounds.book
@@ -298,6 +327,13 @@ fun ShellScreen(
                   (permanentSidebar || sidebarDrawerState.isOpen || sidebarDrawerState.targetValue == DrawerValue.Open),
               showCloseButton = !permanentSidebar,
               onClose = closeSidebar,
+              onToggleFoldSidebar =
+                when {
+                  permanentSidebar -> ({ setFoldSidebarHidden(true) })
+                  foldSidebarHidden -> ({ setFoldSidebarHidden(false); closeSidebar() })
+                  else -> null
+                },
+              toggleFoldSidebarLabel = if (permanentSidebar) "◀ 隠す" else "📌 常に表示",
               onDragActiveChange = { sidebarRowDragging = it },
               onNewSession = {
                 viewModel.startNewChat(worktree = false)
@@ -328,6 +364,11 @@ fun ShellScreen(
                 viewModel.createSessionCatalogEntry(catalogId)
               },
               onSelectDestination = selectSidebarDestination,
+              activeRoute = if (nav.activeTab == Tab.Settings && nav.settingsRoute != SettingsRoute.Home) nav.settingsRoute else null,
+              onSelectRoute = { route ->
+                nav.openSettingsRoute(route)
+                closeSidebar()
+              },
             )
           },
         ) {
@@ -340,6 +381,11 @@ fun ShellScreen(
                 onSelectTab = nav::selectTab,
                 onOpenSettingsRoute = nav::openSettingsRoute,
                 onOpenCommand = { commandOpen = true },
+                onOpenMediaStudio  = { nav.openSettingsRoute(SettingsRoute.MediaStudio) },
+                onOpenModelSamples = { nav.openSettingsRoute(SettingsRoute.MediaStudio) }, // モデル比較は同じ画面の「比較」ボタンから
+                onOpenComicChara   = { nav.openSettingsRoute(SettingsRoute.ComicStudio) },
+                onOpenComicSeries  = { nav.openSettingsRoute(SettingsRoute.ComicStudio) },
+                onOpenMiniGame     = { nav.openSettingsRoute(SettingsRoute.MiniGame) },
               )
             }
 
@@ -364,12 +410,11 @@ fun ShellScreen(
             }
 
             Tab.Sessions -> {
-              SessionsScreen(
-                viewModel = viewModel,
-                showSidebarButton = showSidebarButton,
-                onOpenSidebar = openSidebar,
-                onOpenChat = { nav.selectTab(Tab.Chat) },
-              )
+              CharacterLibraryTab(viewModel = viewModel)
+            }
+
+            Tab.SampleFactory -> {
+              SampleFactoryScreen(viewModel = viewModel, onBack = nav::back)
             }
 
             Tab.Files -> {
@@ -463,6 +508,12 @@ private fun OverviewScreen(
   onSelectTab: (Tab) -> Unit,
   onOpenSettingsRoute: (SettingsRoute) -> Unit,
   onOpenCommand: () -> Unit,
+  onOpenMediaStudio: (() -> Unit)? = null,
+  onOpenModelSamples: (() -> Unit)? = null,
+  onOpenComicChara: (() -> Unit)? = null,
+  onOpenComicSeries: (() -> Unit)? = null,
+  onOpenPartnerAlbum: ((String) -> Unit)? = null,
+  onOpenMiniGame: (() -> Unit)? = null,
 ) {
   val sessions by viewModel.chatSessions.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
@@ -541,21 +592,45 @@ private fun OverviewScreen(
     }
   }
 
+  val context = androidx.compose.ui.platform.LocalContext.current
+  var panels by remember { mutableStateOf(loadHomePanels(context)) }
+  var showCustomize by remember { mutableStateOf(false) }
+
+  // モデルエンジンパネルの折り畳み状態（HomePanelConfigと同期）
+  val modelEngineConfig = panels.firstOrNull { it.id == HomePanelId.MODEL_ENGINE }
+  val modelEngineCollapsed = modelEngineConfig?.collapsed ?: false
+
   ClawScaffold(
     contentPadding = PaddingValues(start = 16.dp, top = 10.dp, end = 16.dp, bottom = 4.dp),
     contentWindowInsets = shellContentInsets,
   ) {
     Box(modifier = Modifier.fillMaxSize()) {
       LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 6.dp)) {
+        // ── 固定ヘッダー（カスタマイズボタン付き） ──
         item {
-          OverviewHeader(
-            status = headerState,
-            showSidebarButton = showSidebarButton,
-            onOpenSidebar = onOpenSidebar,
-            onOpenStatus = { onOpenSettingsRoute(headerRoute) },
-            onOpenCommand = onOpenCommand,
-          )
+          Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Box(modifier = Modifier.weight(1f)) {
+              OverviewHeader(
+                status = headerState,
+                showSidebarButton = showSidebarButton,
+                onOpenSidebar = onOpenSidebar,
+                onOpenStatus = { onOpenSettingsRoute(headerRoute) },
+                onOpenCommand = onOpenCommand,
+              )
+            }
+            ChatEngineSwitch(viewModel = viewModel, connected = isConnected)
+            androidx.compose.material3.IconButton(onClick = { showCustomize = true }) {
+              Icon(
+                imageVector = androidx.compose.material.icons.Icons.Outlined.Settings,
+                contentDescription = "ホームをカスタマイズ",
+                tint = ClawTheme.colors.textMuted,
+                modifier = Modifier.size(20.dp),
+              )
+            }
+          }
         }
+
+        item { GpuBusyBanner(viewModel) }
 
         item {
           Text(
@@ -565,96 +640,132 @@ private fun OverviewScreen(
           )
         }
 
-        item {
-          PcHealthCard(viewModel = viewModel, onOpen = { onOpenSettingsRoute(SettingsRoute.PcHealth) })
-        }
+        // ── パネルを設定順・表示状態に従って描画 ──
+        items(panels.filter { it.visible }, key = { it.id.name }) { panelCfg ->
+          when (panelCfg.id) {
 
-        item {
-          QuickPartnerChatPanel(
-            viewModel = viewModel,
-            onOpenPartnerChat = { partnerId ->
-              viewModel.selectPartnerForChat(partnerId)
-              onOpenSettingsRoute(SettingsRoute.PartnerChat)
-            },
-            onOpenPartnerManagement = {
-              onOpenSettingsRoute(SettingsRoute.PartnerManagement)
-            },
-          )
-        }
+            HomePanelId.PC_HEALTH -> {
+              PcHealthCard(viewModel = viewModel, onOpen = { onOpenSettingsRoute(SettingsRoute.PcHealth) })
+            }
 
-        item {
-          OverviewModelEngineControlPanel(
-            viewModel = viewModel,
-            onOpenChat = { onSelectTab(Tab.Chat) },
-          )
-        }
+            HomePanelId.PARTNER -> {
+              QuickPartnerChatPanel(
+                viewModel = viewModel,
+                onOpenPartnerChat = { partnerId ->
+                  viewModel.selectPartnerForChat(partnerId)
+                  onOpenSettingsRoute(SettingsRoute.PartnerChat)
+                },
+                onOpenPartnerManagement = { onOpenSettingsRoute(SettingsRoute.PartnerManagement) },
+              )
+            }
 
-        item {
-          OverviewPrimaryPanel(
-            agentName = activeAgentName,
-            agentBadge = activeAgentBadge,
-            agentAvatarSource = activeAgentAvatar,
-            statusText = gatewaySummary(gatewayConnectionDisplay),
-            isConnected = gatewayConnectionDisplay.isConnected,
-            pendingRunCount = pendingRunCount,
-            sessionCount = overviewSessionCount,
-            cronJobCount = cronStatus.jobs,
-            onOpenChat = { onSelectTab(Tab.Chat) },
-            onOpenVoice = { onSelectTab(Tab.Chat) },
-            onOpenAgent = { onOpenSettingsRoute(SettingsRoute.Agents) },
-            onOpenGateway = { onOpenSettingsRoute(SettingsRoute.Gateway) },
-          )
-        }
-
-        item {
-          OverviewMetricGrid(
-            cards = metricCards,
-            onOpen = { card ->
-              val route = card.settingsRoute
-              if (route == null) {
-                onSelectTab(card.tab)
-              } else {
-                onOpenSettingsRoute(route)
+            HomePanelId.MODEL_ENGINE -> {
+              // 折り畳み対応パネル
+              Column(
+                modifier = Modifier.fillMaxWidth()
+                  .clip(RoundedCornerShape(12.dp))
+                  .background(ClawTheme.colors.surface),
+              ) {
+                val rotation by animateFloatAsState(if (modelEngineCollapsed) 0f else 180f, label = "model_chevron")
+                Row(
+                  modifier = Modifier.fillMaxWidth()
+                    .clickable {
+                      panels = panels.map {
+                        if (it.id == HomePanelId.MODEL_ENGINE) it.copy(collapsed = !it.collapsed) else it
+                      }.also { saveHomePanels(context, it) }
+                    }
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                  Text("🤖 モデルエンジン", style = ClawTheme.type.body.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = ClawTheme.colors.text)
+                  Icon(
+                    imageVector = androidx.compose.material.icons.Icons.Default.ArrowDropDown,
+                    contentDescription = null,
+                    tint = ClawTheme.colors.textMuted,
+                    modifier = Modifier.size(22.dp).rotate(rotation),
+                  )
+                }
+                AnimatedVisibility(visible = !modelEngineCollapsed, enter = expandVertically(), exit = shrinkVertically()) {
+                  Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    OverviewModelEngineControlPanel(viewModel = viewModel, onOpenChat = { onSelectTab(Tab.Chat) })
+                  }
+                }
               }
-            },
-          )
-        }
+            }
 
-        item {
-          TalkEntryPanel(onOpenVoice = { onSelectTab(Tab.Chat) }, onOpenVoiceSettings = { onOpenSettingsRoute(SettingsRoute.Voice) })
-        }
+            HomePanelId.AGENT_STATUS -> {
+              OverviewPrimaryPanel(
+                agentName = activeAgentName,
+                agentBadge = activeAgentBadge,
+                agentAvatarSource = activeAgentAvatar,
+                statusText = gatewaySummary(gatewayConnectionDisplay),
+                isConnected = gatewayConnectionDisplay.isConnected,
+                pendingRunCount = pendingRunCount,
+                sessionCount = overviewSessionCount,
+                cronJobCount = cronStatus.jobs,
+                onOpenChat = { onSelectTab(Tab.Chat) },
+                onOpenVoice = { onSelectTab(Tab.Chat) },
+                onOpenAgent = { onOpenSettingsRoute(SettingsRoute.Agents) },
+                onOpenGateway = { onOpenSettingsRoute(SettingsRoute.Gateway) },
+              )
+            }
 
-        item { RecentSessionsHeader(onOpenSessions = { onSelectTab(Tab.Sessions) }) }
+            HomePanelId.SHORTCUTS -> {
+              HomeShortcutsPanel(
+                viewModel           = viewModel,
+                onSelectTab         = onSelectTab,
+                onOpenSettingsRoute = onOpenSettingsRoute,
+                onOpenMediaStudio   = onOpenMediaStudio,
+                onOpenModelSamples  = onOpenModelSamples,
+                onOpenComicChara    = onOpenComicChara,
+                onOpenComicSeries   = onOpenComicSeries,
+                onOpenPartnerAlbum  = onOpenPartnerAlbum,
+                onOpenMiniGame      = onOpenMiniGame,
+                onOpenCustomize     = { showCustomize = true },
+              )
+            }
 
-        if (visibleRecentRows.isEmpty()) {
-          item {
-            ClawEmptyState(
-              title = nativeString("No recent threads"),
-              body = nativeString("Start a chat and your active OpenClaw conversations will appear here."),
-              action = { ClawPrimaryButton(text = nativeString("Start Chat"), onClick = { onSelectTab(Tab.Chat) }) },
-            )
-          }
-        } else {
-          item {
-            RecentSessionList(
-              rows = visibleRecentRows,
-              onOpen = { sessionKey, ownerAgentId ->
-                viewModel.switchChatSession(sessionKey, ownerAgentId)
-                onSelectTab(Tab.Chat)
-              },
-            )
-          }
-        }
+            HomePanelId.CHARA_SHORTCUT -> {
+              ClawPanel(modifier = Modifier.fillMaxWidth().clickable { onOpenComicChara?.invoke() }) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                  Text(text = "👥", fontSize = 32.sp)
+                  Column(modifier = Modifier.weight(1f)) {
+                    Text(text = "キャラクター図鑑", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+                    Text(text = "作ったキャラをまとめて見る・設定シートを編集", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+                  }
+                  Text(text = "▶", style = ClawTheme.type.caption, color = ClawTheme.colors.primary)
+                }
+              }
+            }
 
-        if (secondaryAttentionRows.isNotEmpty()) {
-          item {
-            HomeAttentionPanel(rows = secondaryAttentionRows, onSelectTab = onSelectTab, onOpenSettingsRoute = onOpenSettingsRoute)
+            HomePanelId.ATTENTION -> {
+              if (secondaryAttentionRows.isNotEmpty()) {
+                HomeAttentionPanel(rows = secondaryAttentionRows, onSelectTab = onSelectTab, onOpenSettingsRoute = onOpenSettingsRoute)
+              }
+            }
           }
         }
       }
     }
   }
+
+  // カスタマイズダイアログ（ShortcutsPanel の shortcuts state へのアクセスはパネル内から取得）
+  if (showCustomize) {
+    HomeCustomizeDialog(
+      shortcuts = loadHomeShortcuts(context),
+      panels    = panels,
+      onSave    = { newShortcuts, newPanels ->
+        saveHomeShortcuts(context, newShortcuts)
+        saveHomePanels(context, newPanels)
+        panels = newPanels
+        showCustomize = false
+      },
+      onDismiss = { showCustomize = false },
+    )
+  }
 }
+
 
 @Composable
 private fun OverviewHeader(
@@ -1658,7 +1769,7 @@ private fun SettingsShellScreen(
           ),
           SettingsRow(
             SettingsRoute.VoiceStudio,
-            nativeText("録音からオリジナルの声を作成"),
+            nativeText("声の作成・学習・一覧・パートナーの声・読み上げの設定"),
             status = isConnected,
           ),
           SettingsRow(
@@ -1681,6 +1792,11 @@ private fun SettingsShellScreen(
           SettingsRow(
             SettingsRoute.PartnerMemory,
             nativeText("事実・学習データ"),
+            status = isConnected,
+          ),
+          SettingsRow(
+            SettingsRoute.PartnerKnowledge,
+            nativeText("パートナーごとにPDF・Webを覚えさせる"),
             status = isConnected,
           ),
           SettingsRow(
@@ -1717,7 +1833,32 @@ private fun SettingsShellScreen(
           ),
           SettingsRow(
             SettingsRoute.MediaStudio,
-            nativeText("画像・動画・音楽を作る"),
+            nativeText("画像・動画・音楽・漫画を作る"),
+            status = isConnected,
+          ),
+          SettingsRow(
+            SettingsRoute.ComicStudio,
+            nativeText("同じキャラで縦読み漫画を連載・キャラを創って学習"),
+            status = isConnected,
+          ),
+          SettingsRow(
+            SettingsRoute.FaceSwap,
+            nativeText("動画や画像の顔を、図鑑のキャラや写真の顔に入れ替える"),
+            status = isConnected,
+          ),
+          SettingsRow(
+            SettingsRoute.TabCustomize,
+            nativeText("下の（左の）タブを、隠す・並べ替える（長押しでも開けます）"),
+            status = isConnected,
+          ),
+          SettingsRow(
+            SettingsRoute.SampleFactory,
+            nativeText("設定ごとの見本の絵（クリエ）を作る・指示を既定にする・項目を追加"),
+            status = isConnected,
+          ),
+          SettingsRow(
+            SettingsRoute.IdolMaster,
+            nativeText("グループ → 名前でキャラ図鑑に作る・名簿を Wikidata / 公式サイトで補う・写真の入れ場所"),
             status = isConnected,
           ),
           SettingsRow(
@@ -1809,6 +1950,7 @@ private fun SettingsShellScreen(
 
           // ── 🔧 診断 ──
           SettingsRow(SettingsRoute.PcHealth, nativeText("温度・メモリ・稼働状況"), status = isConnected),
+          SettingsRow(SettingsRoute.BlockedTermsAdmin, nativeText("禁止語句・ネガティブタグの管理"), status = isConnected),
           SettingsRow(SettingsRoute.Health, nativeText("Diagnostics"), status = isConnected),
         ).filter { it.route.isAvailable(desktopObserveAvailable) }
 
@@ -1871,7 +2013,19 @@ private fun SettingsShellScreen(
   // Unfolded foldables and tablets: list on the left, the open setting on the right.
   BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
     val twoPane = maxWidth >= SHELL_TWO_PANE_MIN_WIDTH
-    val listPaneWidth = shellListPaneWidth(maxWidth)
+    val paneContext = androidx.compose.ui.platform.LocalContext.current
+    val paneDensity = androidx.compose.ui.platform.LocalDensity.current
+    androidx.compose.runtime.LaunchedEffect(Unit) { FoldStageBus.load(paneContext) }
+    androidx.compose.runtime.DisposableEffect(twoPane) {
+      FoldStageBus.bookMode = twoPane
+      onDispose { FoldStageBus.bookMode = false }
+    }
+    // 左右の境目：ドラッグで変えた割合があればそれを使う（なければ初めの4割）
+    val listPaneWidth =
+      if (FoldStageBus.splitRatio > 0f) (maxWidth * FoldStageBus.splitRatio).coerceIn(200.dp, (maxWidth - 280.dp).coerceAtLeast(200.dp))
+      else shellListPaneWidth(maxWidth)
+    val totalWidthDp = maxWidth
+    val characterOnLeft = route == SettingsRoute.PartnerChat && FoldStageBus.showCharacter && FoldStageBus.characterId.isNotBlank()
     val detail: @Composable () -> Unit = {
       SettingsDetailScreen(
         viewModel = viewModel,
@@ -1881,12 +2035,35 @@ private fun SettingsShellScreen(
       )
     }
     // One call site per pane so folding/unfolding keeps an open setting's unsaved edits.
+    // 左の画面を出すのは、設定のホームと、チャットでキャラを出すときだけ。図鑑・見本・ホームなどの各画面は、全幅で開く
+    val showLeftPane = twoPane && (characterOnLeft || route == SettingsRoute.Home)
     Row(modifier = Modifier.fillMaxSize()) {
-      if (twoPane) {
+      if (showLeftPane) {
         Box(modifier = Modifier.width(listPaneWidth).fillMaxHeight().testTag("settings-list-pane")) {
-          SettingsHomeList(selectedRoute = route)
+          // チャットを開いているときは、左の画面にキャラを出す
+          if (characterOnLeft) FoldCharacterPane(viewModel = viewModel) else SettingsHomeList(selectedRoute = route)
         }
-        Box(modifier = Modifier.fillMaxHeight().width(1.dp).background(ClawTheme.colors.border))
+        // 境目：左右にドラッグして、左右の幅を変える
+        Box(
+          modifier =
+            Modifier
+              .fillMaxHeight()
+              .width(22.dp)
+              .pointerInput(totalWidthDp) {
+                val totalPx = with(paneDensity) { totalWidthDp.toPx() }
+                detectHorizontalDragGestures(onDragEnd = { FoldStageBus.saveSplit(paneContext) }) { change, dragAmount ->
+                  change.consume()
+                  val current = with(paneDensity) { listPaneWidth.toPx() }
+                  val minLeft = with(paneDensity) { 200.dp.toPx() }
+                  val maxLeft = (totalPx - with(paneDensity) { 280.dp.toPx() }).coerceAtLeast(minLeft)
+                  FoldStageBus.splitRatio = ((current + dragAmount).coerceIn(minLeft, maxLeft) / totalPx)
+                }
+              },
+          contentAlignment = Alignment.Center,
+        ) {
+          Box(modifier = Modifier.fillMaxHeight().width(1.dp).background(ClawTheme.colors.border))
+          Box(modifier = Modifier.width(5.dp).height(56.dp).clip(RoundedCornerShape(3.dp)).background(ClawTheme.colors.textMuted.copy(alpha = 0.6f)))
+        }
       }
       Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
         when {
@@ -3088,5 +3265,273 @@ internal fun OverviewModelEngineControlPanel(
         }
       }
     }
+  }
+}
+
+// ────────────────────────────────────────────────────────────────
+// ホームカスタムショートカットパネル
+// ────────────────────────────────────────────────────────────────
+@Composable
+internal fun HomeShortcutsPanel(
+  viewModel: MainViewModel,
+  onSelectTab: (Tab) -> Unit,
+  onOpenSettingsRoute: (SettingsRoute) -> Unit,
+  onOpenMediaStudio: (() -> Unit)? = null,
+  onOpenModelSamples: (() -> Unit)? = null,
+  onOpenComicChara: (() -> Unit)? = null,
+  onOpenComicSeries: (() -> Unit)? = null,
+  onOpenPartnerAlbum: ((String) -> Unit)? = null,
+  onOpenMiniGame: (() -> Unit)? = null,
+  onOpenCustomize: (() -> Unit)? = null,  // null の場合は内部ダイアログで処理
+) {
+  val context = androidx.compose.ui.platform.LocalContext.current
+  var shortcuts by androidx.compose.runtime.remember {
+    androidx.compose.runtime.mutableStateOf(loadHomeShortcuts(context))
+  }
+  var showCustomize by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+  var longPressTarget by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<HomeShortcutId?>(null) }
+
+  val visibleShortcuts = shortcuts.filter { it.visible }
+
+  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    // ヘッダー
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+      Text(
+        text = "🏠 ホームショートカット",
+        style = ClawTheme.type.body.copy(fontSize = 15.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
+        color = ClawTheme.colors.text,
+      )
+      androidx.compose.material3.TextButton(onClick = { onOpenCustomize?.invoke() ?: run { showCustomize = true } }) {
+        Text("カスタマイズ ✏️", style = ClawTheme.type.captionSmall, color = ClawTheme.colors.primary)
+      }
+    }
+
+    if (visibleShortcuts.isEmpty()) {
+      Text(
+        text = "「カスタマイズ」からショートカットを追加できます",
+        style = ClawTheme.type.captionSmall,
+        color = ClawTheme.colors.textMuted,
+      )
+    }
+
+    visibleShortcuts.forEach { sc ->
+      HomeShortcutCard(
+        shortcut     = sc,
+        onToggleExpand = {
+          shortcuts = shortcuts.map { if (it.id == sc.id) it.copy(expanded = !it.expanded) else it }
+          saveHomeShortcuts(context, shortcuts)
+        },
+        onLongPress  = { longPressTarget = sc.id },
+      ) {
+        // ショートカット別のコンテンツ
+        when (sc.id) {
+          HomeShortcutId.STUDIO_IMAGE, HomeShortcutId.STUDIO_VIDEO,
+          HomeShortcutId.STUDIO_MUSIC, HomeShortcutId.STUDIO_MANGA,
+          HomeShortcutId.STUDIO_VOICE, HomeShortcutId.STUDIO_MOTION -> {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+              Text(sc.id.description, style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted)
+              ClawPrimaryButton(text = "${sc.id.icon} 生成スタジオを開く", onClick = { onOpenMediaStudio?.invoke() }, modifier = Modifier.fillMaxWidth())
+            }
+          }
+          HomeShortcutId.MODEL_SAMPLE -> {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+              Text("全モデルで同じプロンプトを生成して比較できます", style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted)
+              ClawPrimaryButton(text = "🖼️ モデル比較を開く", onClick = { onOpenModelSamples?.invoke() }, modifier = Modifier.fillMaxWidth())
+            }
+          }
+          HomeShortcutId.COMIC_CHARA -> {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+              Text("キャラを作成・管理・専用学習できます", style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted)
+              // ⭐ お気に入りキャラをアイコン+名前グリッドで表示
+              val favoriteCharas = remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+              LaunchedEffect(Unit) {
+                runCatching {
+                  val arr = JSONObject(viewModel.runGatewayRpc(GatewayMethod.ComicCharacterList, "{}")).optJSONArray("characters") ?: JSONArray()
+                  favoriteCharas.value = (0 until arr.length()).mapNotNull { i ->
+                    val c = arr.getJSONObject(i)
+                    if (c.optBoolean("isFavorite", false)) Pair(c.optString("id"), c.optString("name")) else null
+                  }
+                }
+              }
+              if (favoriteCharas.value.isNotEmpty()) {
+                Text("⭐ お気に入りキャラ", style = ClawTheme.type.captionSmall, color = ClawTheme.colors.primary)
+                Row(
+                  horizontalArrangement = Arrangement.spacedBy(8.dp),
+                  modifier = Modifier.fillMaxWidth(),
+                ) {
+                  favoriteCharas.value.take(5).forEach { (id, name) ->
+                    Column(
+                      horizontalAlignment = Alignment.CenterHorizontally,
+                      modifier = Modifier.weight(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(ClawTheme.colors.primary.copy(alpha = 0.08f))
+                        .clickable { onOpenComicChara?.invoke() }
+                        .padding(6.dp),
+                    ) {
+                      Text("⭐", fontSize = 24.sp)
+                      Text(
+                        text = if (name.length > 5) name.take(4) + "…" else name,
+                        style = ClawTheme.type.captionSmall.copy(fontSize = 10.sp),
+                        color = ClawTheme.colors.text,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                      )
+                    }
+                  }
+                  // 空白スペーサー
+                  repeat((5 - favoriteCharas.value.size).coerceAtLeast(0)) {
+                    Spacer(modifier = Modifier.weight(1f))
+                  }
+                }
+              }
+              ClawPrimaryButton(text = "👤 キャラ図鑑を開く", onClick = { onOpenComicChara?.invoke() }, modifier = Modifier.fillMaxWidth())
+            }
+          }
+
+          HomeShortcutId.COMIC_SERIES -> {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+              Text("連載コミックの作成・管理ができます", style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted)
+              ClawPrimaryButton(text = "📚 連載コミックを開く", onClick = { onOpenComicSeries?.invoke() }, modifier = Modifier.fillMaxWidth())
+            }
+          }
+          HomeShortcutId.PARTNER_CHAT -> {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+              Text("AIパートナーとチャット・音声で話せます", style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted)
+              ClawPrimaryButton(text = "💬 チャットを開く", onClick = { onSelectTab(Tab.Chat) }, modifier = Modifier.fillMaxWidth())
+            }
+          }
+          HomeShortcutId.PARTNER_ALBUM -> {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+              Text("パートナーの画像アルバムを管理できます", style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted)
+              ClawPrimaryButton(text = "📷 アルバムを開く", onClick = { onOpenSettingsRoute(SettingsRoute.PartnerAlbum) }, modifier = Modifier.fillMaxWidth())
+            }
+          }
+          HomeShortcutId.PARTNER_DREAM -> {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+              Text("パートナーの夢日記を見られます", style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted)
+              ClawPrimaryButton(text = "💤 夢日記を開く", onClick = { onOpenSettingsRoute(SettingsRoute.PartnerDream) }, modifier = Modifier.fillMaxWidth())
+            }
+          }
+          HomeShortcutId.PC_HEALTH -> {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+              Text("PCのCPU・GPU・温度・ストレージを確認できます", style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted)
+              ClawPrimaryButton(text = "💻 PCヘルスを開く", onClick = { onOpenSettingsRoute(SettingsRoute.PcHealth) }, modifier = Modifier.fillMaxWidth())
+            }
+          }
+          HomeShortcutId.DAILY_BRIEF -> {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+              Text("今日のニュース・天気を確認できます", style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted)
+              ClawPrimaryButton(text = "🗞 ブリーフィングを開く", onClick = { onOpenSettingsRoute(SettingsRoute.PartnerManagement) }, modifier = Modifier.fillMaxWidth())
+            }
+          }
+          HomeShortcutId.QUICK_CHAT -> {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+              Text("すぐにチャット画面に移動します", style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted)
+              ClawPrimaryButton(text = "✍ チャットを開く", onClick = { onSelectTab(Tab.Chat) }, modifier = Modifier.fillMaxWidth())
+            }
+          }
+          HomeShortcutId.MINI_GAME -> {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+              Text("内蔵ミニゲームで遊べます", style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted)
+              ClawPrimaryButton(text = "🎮 ミニゲームを開く", onClick = { onOpenMiniGame?.invoke() }, modifier = Modifier.fillMaxWidth())
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // カスタマイズは onOpenCustomize 経由で上位 OverviewScreen のダイアログを使用
+
+  // 長押しメニュー（追加/削除）
+  longPressTarget?.let { targetId ->
+    AddToHomeDialog(
+      shortcutId = targetId,
+      currentShortcuts = shortcuts,
+      onAdd = {
+        shortcuts = shortcuts.map { if (it.id == targetId) it.copy(visible = true) else it }
+        saveHomeShortcuts(context, shortcuts)
+        longPressTarget = null
+      },
+      onRemove = {
+        shortcuts = shortcuts.map { if (it.id == targetId) it.copy(visible = false) else it }
+        saveHomeShortcuts(context, shortcuts)
+        longPressTarget = null
+      },
+      onDismiss = { longPressTarget = null },
+    )
+  }
+}
+
+// ── キャラクター図鑑タブ ──────────────────────────────────────────────────────
+// Tab.Sessions に割り当てられる独立タブ。
+// ComicStudioScreen から切り離してシェルから直接呼べるラッパー。
+
+@Composable
+private fun CharacterLibraryTab(viewModel: MainViewModel) {
+  val context = androidx.compose.ui.platform.LocalContext.current
+  var library by remember { mutableStateOf<List<LibraryChara>>(emptyList()) }
+  val images = remember { mutableStateMapOf<String, android.graphics.Bitmap>() }
+
+  suspend fun rpc(method: GatewayMethod, params: org.json.JSONObject, timeoutMs: Long = 30_000): org.json.JSONObject =
+    org.json.JSONObject(viewModel.runGatewayRpc(method, params.toString(), timeoutMs = timeoutMs))
+
+  suspend fun loadLibrary() {
+    runCatching {
+      library = parseLibrary(rpc(GatewayMethod.ComicCharacterList, org.json.JSONObject()).optJSONArray("characters"))
+    }
+  }
+
+  suspend fun image(jobId: String): android.graphics.Bitmap? {
+    images[jobId]?.let { return it }
+    val cached = java.io.File(context.cacheDir, "character-sheet-$jobId.img")
+    if (cached.isFile && cached.length() > 0L) {
+      val image = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        android.graphics.BitmapFactory.decodeFile(cached.absolutePath)
+      }
+      if (image != null) return image.also { images[jobId] = it }
+      cached.delete()
+    }
+    return runCatching {
+      val res = rpc(GatewayMethod.MediaJobResult, org.json.JSONObject().put("jobId", jobId).put("part", 0), 120_000)
+      val base64 = res.optString("base64")
+      kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        if (base64.isBlank()) return@withContext null
+        runCatching {
+          val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
+          android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.also { cached.writeBytes(bytes) }
+        }.getOrNull()
+      }
+    }.getOrNull()?.also { images[jobId] = it }
+  }
+
+  val training = library.any { it.loraStatus == "training" || it.loraStatus == "queued" }
+
+  androidx.compose.runtime.LaunchedEffect(Unit) { loadLibrary() }
+  androidx.compose.runtime.LaunchedEffect(training) {
+    while (training) {
+      kotlinx.coroutines.delay(15_000)
+      loadLibrary()
+    }
+  }
+
+  // ステータスバーの被りを防ぐ（Fold系端末・Compact共通）
+  Box(
+    modifier = Modifier
+      .fillMaxSize()
+      .statusBarsPadding()
+  ) {
+    ComicCharacterLibrary(
+      viewModel = viewModel,
+      characters = library,
+      reload = { loadLibrary() },
+      loadImage = { id -> image(id) },
+      track = { /* タブからはジョブ追跡不要 */ },
+      candidateSheets = { emptyList() },
+    )
   }
 }

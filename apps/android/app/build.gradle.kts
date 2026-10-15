@@ -84,6 +84,17 @@ val invocationBuildTimestamp =
   providers.provider { buildTimestampFormatter.format(Instant.now()) }.get()
 val openClawBuildTimestamp = explicitOpenClawBuildTimestamp ?: invocationBuildTimestamp
 
+// Optional: a build that already knows the user's own gateway connects on first start with no setup.
+// apps/android/gateway.local.properties (never committed) holds host, port, tls and token. Anyone who
+// has this APK can reach that gateway, so install such a build only on the user's own devices.
+val bundledGatewayFile = rootProject.file("gateway.local.properties")
+val bundledGatewayProperties =
+  Properties().apply { if (bundledGatewayFile.isFile) bundledGatewayFile.inputStream().use(::load) }
+
+fun bundledGatewayProperty(name: String): String = bundledGatewayProperties.getProperty(name)?.trim().orEmpty()
+
+fun quotedBuildConfigString(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
 val androidStoreFile = providers.gradleProperty("OPENCLAW_ANDROID_STORE_FILE").orNull?.takeIf { it.isNotBlank() }
 val androidStorePassword = providers.gradleProperty("OPENCLAW_ANDROID_STORE_PASSWORD").orNull?.takeIf { it.isNotBlank() }
 val androidKeyAlias = providers.gradleProperty("OPENCLAW_ANDROID_KEY_ALIAS").orNull?.takeIf { it.isNotBlank() }
@@ -149,6 +160,10 @@ android {
     versionName = openClawAndroidVersionName
     buildConfigField("String", "GIT_COMMIT", "\"$openClawBuildCommit\"")
     buildConfigField("String", "BUILD_TIMESTAMP", "\"$openClawBuildTimestamp\"")
+    buildConfigField("String", "BUNDLED_GATEWAY_HOST", quotedBuildConfigString(bundledGatewayProperty("host")))
+    buildConfigField("int", "BUNDLED_GATEWAY_PORT", (bundledGatewayProperty("port").toIntOrNull() ?: 0).toString())
+    buildConfigField("boolean", "BUNDLED_GATEWAY_TLS", (bundledGatewayProperty("tls").lowercase() == "true").toString())
+    buildConfigField("String", "BUNDLED_GATEWAY_TOKEN", quotedBuildConfigString(bundledGatewayProperty("token")))
     ndk {
       // Support all major ABIs — native libs are tiny (~47 KB per ABI)
       abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
@@ -328,6 +343,7 @@ dependencies {
   // AppCompat owns per-app locale persistence and Activity recreation on API 31-32.
   implementation(libs.androidx.appcompat)
   implementation(libs.androidx.lifecycle.runtime.ktx)
+  implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.activity.compose)
   implementation(libs.androidx.webkit)
   implementation(libs.androidx.window)

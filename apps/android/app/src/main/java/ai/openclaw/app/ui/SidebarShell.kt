@@ -1,5 +1,16 @@
 package ai.openclaw.app.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntOffset
+import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -89,9 +100,28 @@ internal fun SidebarNavigationShell(
   bookPanes: BookPaneBounds? = null,
   sidebarBand: IntRect? = null,
   gesturesEnabled: Boolean = true,
+  /** 左の画面の幅の割合（0 = 折りたたみの位置のまま）。境目をドラッグして変える。 */
+  splitRatio: Float = 0f,
+  onSplitRatioChange: ((Float) -> Unit)? = null,
+  onSplitRatioDone: () -> Unit = {},
   drawerContent: @Composable () -> Unit,
   content: @Composable () -> Unit,
 ) {
+  val density = androidx.compose.ui.platform.LocalDensity.current
+  val panes =
+    if (bookPanes != null && splitRatio > 0f) {
+      with(density) {
+        val total = bookPanes.end.right - bookPanes.start.left
+        val width = (total * splitRatio).toInt().coerceIn(280.dp.roundToPx(), (total - 320.dp.roundToPx()).coerceAtLeast(280.dp.roundToPx()))
+        BookPaneBounds(
+          start = bookPanes.start.copy(right = bookPanes.start.left + width),
+          end = bookPanes.end.copy(left = bookPanes.start.left + width),
+        )
+      }
+    } else {
+      bookPanes
+    }
+  val currentStartWidth by rememberUpdatedState(panes?.start?.width ?: 0)
   val currentSidebar by rememberUpdatedState(drawerContent)
   val sidebar = remember { movableContentOf { currentSidebar() } }
 
@@ -135,14 +165,45 @@ internal fun SidebarNavigationShell(
         },
         modifier = Modifier.fillMaxSize(),
       ) { measurables, constraints ->
-        val destinationBounds = bookPanes?.end ?: IntRect(0, 0, constraints.maxWidth, constraints.maxHeight)
+        val destinationBounds = panes?.end ?: IntRect(0, 0, constraints.maxWidth, constraints.maxHeight)
         val destinationPlaceable =
           measurables[0].measure(Constraints.fixed(destinationBounds.width, destinationBounds.height))
         val sidebarPlaceable =
-          bookPanes?.let { measurables[1].measure(Constraints.fixed(it.start.width, it.start.height)) }
+          panes?.let { measurables[1].measure(Constraints.fixed(it.start.width, it.start.height)) }
         layout(constraints.maxWidth, constraints.maxHeight) {
           destinationPlaceable.place(destinationBounds.left, destinationBounds.top)
-          bookPanes?.let { sidebarPlaceable?.place(it.start.left, it.start.top) }
+          panes?.let { sidebarPlaceable?.place(it.start.left, it.start.top) }
+        }
+      }
+      // 境目：左右にドラッグして、2つの画面の幅の割合を変える
+      if (panes != null && onSplitRatioChange != null) {
+        val total = (panes.end.right - panes.start.left).coerceAtLeast(1)
+        val handleWidth = 28.dp
+        Box(
+          modifier =
+            Modifier
+              .offset { IntOffset(panes.start.right - handleWidth.roundToPx() / 2, panes.start.top) }
+              .width(handleWidth)
+              .height(with(density) { panes.start.height.toDp() })
+              .pointerInput(total) {
+                detectHorizontalDragGestures(onDragEnd = onSplitRatioDone) { change, dragAmount ->
+                  change.consume()
+                  val minStart = 280.dp.toPx()
+                  val minEnd = 320.dp.toPx()
+                  val next = (currentStartWidth + dragAmount).coerceIn(minStart, (total - minEnd).coerceAtLeast(minStart))
+                  onSplitRatioChange(next / total)
+                }
+              },
+          contentAlignment = Alignment.Center,
+        ) {
+          Box(
+            modifier =
+              Modifier
+                .width(5.dp)
+                .height(56.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(ClawTheme.colors.textMuted.copy(alpha = 0.55f)),
+          )
         }
       }
     }

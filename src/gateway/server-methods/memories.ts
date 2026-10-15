@@ -85,7 +85,7 @@ export const memoriesHandlers: GatewayRequestHandlers = {
         undefined,
       );
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(e)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
     }
   },
 
@@ -129,7 +129,7 @@ export const memoriesHandlers: GatewayRequestHandlers = {
         undefined,
       );
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(e)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
     }
   },
 
@@ -145,7 +145,7 @@ export const memoriesHandlers: GatewayRequestHandlers = {
       }
       respond(true, { success: true, target: target || "short-term" }, undefined);
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(e)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
     }
   },
 
@@ -216,7 +216,7 @@ export const memoriesHandlers: GatewayRequestHandlers = {
         undefined,
       );
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(e)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
     }
   },
 };

@@ -31,6 +31,7 @@ import kotlinx.coroutines.withContext
 class NodeForegroundService : Service() {
   private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
   private var notificationJob: Job? = null
+  private var generationJob: Job? = null
   private var voiceCaptureMode = VoiceCaptureMode.Off
 
   override fun onCreate() {
@@ -62,7 +63,12 @@ class NodeForegroundService : Service() {
             stopSelfResult(startId)
             return@launch
           } ?: return@launch
-        if (app.nodeServiceStartAllowed) collectNotificationState(runtime)
+        if (app.nodeServiceStartAllowed) {
+          // 生成の進み具合を、通知バーに出し続ける（アプリを閉じても、PCの生成は続く）。
+          generationJob?.cancel()
+          generationJob = scope.launch { GenerationNotifier(this@NodeForegroundService).watch(runtime) }
+          collectNotificationState(runtime)
+        }
       }
   }
 
@@ -188,6 +194,7 @@ class NodeForegroundService : Service() {
   }
 
   override fun onDestroy() {
+    generationJob?.cancel()
     scope.cancel()
     super.onDestroy()
   }

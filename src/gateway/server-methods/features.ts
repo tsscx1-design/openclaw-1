@@ -71,7 +71,7 @@ export const featuresHandlers: GatewayRequestHandlers = {
       const settings = await loadFeatureSettings();
       respond(true, { settings }, undefined);
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(e)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
     }
   },
 
@@ -122,7 +122,7 @@ export const featuresHandlers: GatewayRequestHandlers = {
 
       respond(true, { settings: updated }, undefined);
     } catch (e) {
-      respond(false, undefined, errorShape(ErrorCodes.INTERNAL_ERROR, String(e)));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(e)));
     }
   },
 };

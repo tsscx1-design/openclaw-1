@@ -11,14 +11,14 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import MarkdownIt from "markdown-it";
 import type { Nodes } from "mdast";
 import { resolveClawHubRepoPath, syncClawHubDocsTree } from "./docs-sync-publish.mjs";
-import { parseDocsDocument, resolveDocsFragment } from "./lib/docs-markdown.mjs";
+import { parseDocsDocument, resolveDocsFragment, type DocsDocument } from "./lib/docs-markdown.mjs";
 import {
   addRoute,
   collectMirroredDocsRoutes,
   collectNavPageEntries,
   normalizeRoute,
 } from "./lib/docs-published-routes.mts";
-import { resolveRedirects } from "./lib/docs-redirects.mjs";
+import { resolveRedirects, type DocsRedirect } from "./lib/docs-redirects.mjs";
 
 const ROOT = process.cwd();
 const DOCS_DIR = path.join(ROOT, "docs");
@@ -285,9 +285,9 @@ function isGeneratedTranslatedDoc(relPath: string) {
   return isLocalizedDocPath(relPath);
 }
 
-function createRedirectMap(docsConfig: Record<string, unknown>): Map<string, string> {
-  const redirects = new Map<string, string>();
+function collectDocsRedirects(docsConfig: Record<string, unknown>): DocsRedirect[] {
   const redirectEntries = Array.isArray(docsConfig.redirects) ? docsConfig.redirects : [];
+  const redirects: DocsRedirect[] = [];
   for (const item of redirectEntries) {
     if (!isRecord(item)) {
       continue;
@@ -296,9 +296,13 @@ function createRedirectMap(docsConfig: Record<string, unknown>): Map<string, str
     const destination = normalizeRoute(
       typeof item.destination === "string" ? item.destination : "",
     );
-    redirects.set(source, destination);
+    redirects.push({ source, destination });
   }
   return redirects;
+}
+
+function createRedirectMap(redirects: Iterable<DocsRedirect>): Map<string, string> {
+  return new Map([...redirects].map(({ source, destination }) => [source, destination]));
 }
 
 function buildAuditIndex(
@@ -311,7 +315,8 @@ function buildAuditIndex(
     throw new Error(`${docsJsonPath} must contain an object`);
   }
   const docsConfig = parsedConfig;
-  const redirects = createRedirectMap(docsConfig);
+  const docsRedirects = collectDocsRedirects(docsConfig);
+  const redirects = createRedirectMap(docsRedirects);
   const allFiles = walk(docsDir);
   const relAllFiles = new Set(allFiles.map((abs) => normalizeSlashes(path.relative(docsDir, abs))));
   const markdownFiles = allFiles.filter((abs) => {
@@ -352,7 +357,16 @@ function buildAuditIndex(
     }
   }
 
-  return { docsDir, docsConfig, redirects, allFiles, relAllFiles, markdownFiles, routes };
+  return {
+    docsDir,
+    docsConfig,
+    docsRedirects,
+    redirects,
+    allFiles,
+    relAllFiles,
+    markdownFiles,
+    routes,
+  };
 }
 
 let defaultAuditIndex: ReturnType<typeof buildAuditIndex> | undefined;
@@ -458,7 +472,7 @@ function auditDocsLinks(
 
   // The publisher writes physical/index routes; frontmatter permalinks do not
   // create pages. Only emitted pages and configured redirects can prove fragments.
-  const pages = new Map<string, ReturnType<typeof parseDocsDocument>>();
+  const pages = new Map<string, DocsDocument<{ href: string; line: number }>>();
   const pageRoute = (rel: string) =>
     normalizeRoute(rel.replace(/\.mdx?$/i, "").replace(/(?:^|\/)index$/, ""));
   for (const abs of index.markdownFiles) {
@@ -491,7 +505,7 @@ function auditDocsLinks(
   const redirectTargets = new Map<string, ReturnType<typeof parseAuditUrl>>();
   if (options.anchors) {
     const records = resolveRedirects({
-      redirects: index.docsConfig.redirects ?? [],
+      redirects: index.docsRedirects,
       pages: [...pages.keys()].map((route) => ({ route, markdownRoute: `${route}.md` })),
       localeCodes: ["en"],
       prefixes: [],

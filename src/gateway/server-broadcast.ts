@@ -51,6 +51,8 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "ui.command": [READ_SCOPE],
   "chat.send_timing": [READ_SCOPE],
   "chat.side_result": [READ_SCOPE],
+  // The partner reply as it is being written (text so far), so the phone can show and read it early.
+  "partner.chat.delta": [READ_SCOPE],
   cron: [READ_SCOPE],
   health: [],
   "exec.approval.requested": [APPROVALS_SCOPE],
