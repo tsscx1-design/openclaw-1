@@ -12,7 +12,13 @@ import {
   triggerFor,
 } from "../comic-characters.js";
 import { adoptLatestSheet } from "./character-avatar.js";
-import { sdxlModelOf, sdxlSpecOf } from "./config.js";
+import {
+  QWEN_LORA_DIR,
+  qwenTurboSettings,
+  sdxlModelOf,
+  sdxlSpecOf,
+  VIGGLE_TURBO_LORA,
+} from "./config.js";
 import { acquireGpu, latestTrainingState, trainingDatasetCount } from "./gpu-lease.js";
 import { stopImageWorker } from "./image.js";
 import { exists } from "./paths.js";
@@ -22,31 +28,6 @@ import type { MediaJob } from "./types.js";
 const SD_SCRIPTS_DIR = "D:\\media-tools\\sd-scripts";
 
 export const SD_SCRIPTS_PYTHON = path.join(SD_SCRIPTS_DIR, "venv", "Scripts", "python.exe");
-
-/**
- * Qwen Image 2.1 (7B, already installed) with the Viggle Turbo LoRA: 6 steps instead of ~30, so a
- * reference picture becomes a new view in about 25 s. The LoRA files sit in Wan2GP's loras folder.
- */
-export const QWEN_EDIT_MODEL = "qwen_image_21_7B";
-
-export const QWEN_LORA_DIR = "D:\\media-tools\\Wan2GP\\loras\\qwen21";
-
-export const VIGGLE_TURBO_LORA = "Qwen-Image-2.1-viggle-turbo-v0.3-6step-lora-r256.safetensors";
-
-export const OUTPAINT_LORA = "qwen-image-2.1-outpaint-v2.safetensors";
-
-/** The Wan2GP settings that turn Qwen Image 2.1 into the 6-step editor (plus extra LoRAs, if any). */
-export function qwenTurboSettings(extraLoras: string[] = []): Record<string, unknown> {
-  return {
-    model_type: QWEN_EDIT_MODEL,
-    num_inference_steps: 6,
-    guidance_scale: 1,
-    sample_solver: "viggle_v02",
-    activated_loras: [...extraLoras, VIGGLE_TURBO_LORA],
-    loras_multipliers: [...extraLoras, VIGGLE_TURBO_LORA].map(() => "1").join(" "),
-    negative_prompt: "",
-  };
-}
 
 const LORA_REPEATS = 8;
 

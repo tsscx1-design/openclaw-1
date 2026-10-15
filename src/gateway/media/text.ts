@@ -5,7 +5,6 @@ import {
   type LibraryCharacter,
   lookWithOutfit,
 } from "../comic-characters.js";
-import { getMediaJob } from "../media-studio.js";
 import {
   SPECIALIST_WORKERS,
   startSpecialistWorker,
@@ -13,6 +12,7 @@ import {
 } from "../specialist-router.js";
 import { isWanImageModel, MAX_TEXT, sdxlModelOf, sdxlSpecOf } from "./config.js";
 import { exists, pauseFlag } from "./paths.js";
+import { getMediaJob } from "./state.js";
 import type { MediaJob } from "./types.js";
 
 // ---------- Safety ----------

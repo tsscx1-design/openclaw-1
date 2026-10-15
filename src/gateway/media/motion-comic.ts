@@ -6,7 +6,6 @@ import { characterMotionPrompt, readCharacterMotionProfile } from "../character-
 import { characterLook, getCharacter, lookWithOutfit, specSummary } from "../comic-characters.js";
 import { stopIrodoriWorker, synthesizeIrodori } from "../irodori-tts.js";
 import { generationCudaDevices } from "../media-gpu.js";
-import { getMediaJob } from "../media-studio.js";
 import {
   MOTION_TEMPLATES,
   motionCuts,
@@ -30,28 +29,22 @@ import {
   voiceStyleNote,
 } from "../motion-extras.js";
 import { referenceClip } from "../partner-voice-clone.js";
-import { isSdxlModel, SDXL_MODELS, sdxlSpecOf } from "./config.js";
+import { MOTION_SCRIPT, MOTION_TIMEOUT_MS, motionModelFile, WAN2GP_PYTHON } from "./config.js";
 import { acquireGpu } from "./gpu-lease.js";
 import { stopImageWorker } from "./image.js";
 import { writeScript } from "./manga.js";
 import { runMotionJoin } from "./motion-join.js";
 import { exists, outDir, resultPath } from "./paths.js";
 import { markStage, runTool } from "./runner.js";
+import { getMediaJob } from "./state.js";
 import { assertAllowedRequest, productionRequest } from "./text.js";
-import type { ImageModel, MediaJob, MediaOptions } from "./types.js";
-import { WAN2GP_PYTHON } from "./video.js";
-
-/** Motion comic runner (key images, Wan 2.2 cuts, film) and its sound effects; outside the repo. */
-export const MOTION_SCRIPT = "D:\\media-tools\\motion-comic\\motion_comic.py";
+import type { MediaJob, MediaOptions } from "./types.js";
 
 const MOTION_FELLATIO_SFX = "D:\\media-tools\\motion-comic\\sfx\\tsumugi\\008_フェラ.wav";
 
 /** Spoken calmly in the described voice; the film's lines then copy this voice. */
 const MOTION_VOICE_SAMPLE =
   "…こんばんは。今日は、ゆっくりしていってね。あなたのこと、ずっと待ってたんだから。";
-
-/** A cut of 3 s took ~11 min at 832x480; the fast profile (640x368, Real-ESRGAN) takes ~6 min, see clips.py. */
-export const MOTION_TIMEOUT_MS = 4 * 60 * 60_000;
 
 /**
  * An adult scene as AI video cuts: the writer fills in the content, the voices are made with
@@ -386,11 +379,6 @@ async function runMotionScript(
   job.file = file;
   job.mime = draft ? "image/png" : "video/mp4";
   job.motion = { dir, ...(draft ? { draft: true } : {}) };
-}
-
-/** The checkpoint file of the key pictures: the chosen SDXL model, else the standard one. */
-export function motionModelFile(model?: ImageModel): string {
-  return (model && isSdxlModel(model) ? sdxlSpecOf(model) : SDXL_MODELS.wai).file;
 }
 
 /** Takes the cast, voice, look and place of a finished motion comic for the new one. */

@@ -11,15 +11,21 @@ import {
   samplesDir,
   saveSampleIndex,
 } from "../sample-factory.js";
-import { QWEN_LORA_DIR, VIGGLE_TURBO_LORA } from "./character-lora.js";
-import { photoEngineSettings, pngSize } from "./character-sheet.js";
+import { photoEngineSettings } from "./character-prompts.js";
+import { pngSize } from "./character-sheet.js";
+import {
+  QWEN_LORA_DIR,
+  VIGGLE_TURBO_LORA,
+  WAN2GP_DIR,
+  WAN2GP_PYTHON,
+  WAN2GP_RUNNER,
+} from "./config.js";
 import { acquireGpu } from "./gpu-lease.js";
 import { stopImageWorker } from "./image.js";
 import { exists } from "./paths.js";
 import { markStage, runTool, runWan2gpManifest } from "./runner.js";
 import { assertAllowedRequest } from "./text.js";
 import type { MediaJob } from "./types.js";
-import { WAN2GP_DIR, WAN2GP_PYTHON, WAN2GP_RUNNER } from "./video.js";
 import { VOICE_FFMPEG } from "./voice-drama.js";
 
 /**

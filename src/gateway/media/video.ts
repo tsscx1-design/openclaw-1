@@ -1,6 +1,5 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { jobs, loadJobMeta } from "../media-studio.js";
 import {
   REMIX_HIGH,
   REMIX_LOW,
@@ -11,11 +10,15 @@ import {
   VIDEO_T5,
   VIDEO_VAE,
   videoNegative,
+  WAN2GP_DIR,
+  WAN2GP_PYTHON,
+  WAN2GP_RUNNER,
 } from "./config.js";
 import { acquireGpu, stopCpuWorkers } from "./gpu-lease.js";
 import { renderImage } from "./image.js";
 import { outDir, resultPath, sdCli } from "./paths.js";
 import { markStage, runTool, stepNote } from "./runner.js";
+import { jobs, loadJobMeta } from "./state.js";
 import {
   assertAllowedRequest,
   imagePromptFor,
@@ -190,14 +193,6 @@ async function smoothVideo(job: MediaJob): Promise<void> {
 }
 
 // Wan2GP engines run headless through its Python API (openclaw_job.py); nothing is served on the network.
-export const WAN2GP_DIR = "D:\\media-tools\\Wan2GP";
-
-export const WAN2GP_PYTHON = path.join(WAN2GP_DIR, "venv", "Scripts", "python.exe");
-
-export const WAN2GP_RUNNER = path.join(WAN2GP_DIR, "openclaw_job.py");
-
-export const QWEN_TURBO_RUNNER = path.resolve("scripts/media/external/qwen_image_turbo_job.py");
-
 const WAN2GP_SIZES: Record<NonNullable<MediaOptions["aspect"]>, string> = {
   square: "624x624",
   portrait: "480x832",

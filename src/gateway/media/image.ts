@@ -9,25 +9,28 @@ import { runTagger } from "../character-creator.js";
 import { getCharacter } from "../comic-characters.js";
 import { probeMedia } from "../face-swap.js";
 import { generationCudaDevice, generationCudaDevices, mediaProcessEnv } from "../media-gpu.js";
-import { currentJob, getMediaJob, queue } from "../media-studio.js";
 import { adultLead, adultSentence } from "../minor-safeguards.js";
 import { upscaleWithSeedVr } from "../seedvr-comfy.js";
-import { qwenTurboSettings } from "./character-lora.js";
 import {
   IMAGE_MODEL,
   isSdxlModel,
   isWanImageModel,
+  QWEN_TURBO_RUNNER,
+  qwenTurboSettings,
   sdxlModelOf,
   sdxlSampling,
   sdxlSpecOf,
   SIZES,
+  WAN2GP_DIR,
+  WAN2GP_PYTHON,
+  WAN2GP_RUNNER,
 } from "./config.js";
 import { acquireGpu } from "./gpu-lease.js";
 import { exists, outDir, resultPath, sdCli } from "./paths.js";
 import { markStage, runTool, stepNote } from "./runner.js";
+import { currentJob, getMediaJob, queue } from "./state.js";
 import { assertAllowedRequest, imagePromptFor, isSexualRequest } from "./text.js";
 import type { MediaJob, MediaOptions, WanImageModel } from "./types.js";
-import { QWEN_TURBO_RUNNER, WAN2GP_DIR, WAN2GP_PYTHON, WAN2GP_RUNNER } from "./video.js";
 
 // ---------- Resident SDXL worker (PyTorch) ----------
 // diffusers on the GPU samples ~2.5x faster than sd.cpp, and keeping the process (weights in RAM)

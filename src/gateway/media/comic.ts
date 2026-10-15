@@ -32,7 +32,6 @@ import {
   parseComicScript,
   saveComicSeries,
 } from "../comic-series.js";
-import { getMediaJob, saveJobMeta, working } from "../media-studio.js";
 import { loadSampleDescriptions, resolveSampleSubject } from "../sample-factory.js";
 import { runCharacterAvatar, runCharacterMini, runCharacterModel3d } from "./character-avatar.js";
 import { runCharacterLora } from "./character-lora.js";
@@ -51,6 +50,7 @@ import {
 } from "./manga.js";
 import { outDir } from "./paths.js";
 import { markStage } from "./runner.js";
+import { getMediaJob, saveJobMeta, working } from "./state.js";
 import { askGemma, assertAllowedRequest, isSexualRequest, productionRequest } from "./text.js";
 import type { MediaJob, MediaOptions } from "./types.js";
 

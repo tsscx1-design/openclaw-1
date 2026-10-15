@@ -3,10 +3,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { generationCudaDevice, generationCudaDevices, mediaProcessEnv } from "../media-gpu.js";
-import { currentJob } from "../media-studio.js";
-import { JOB_TIMEOUT_MS } from "./config.js";
+import { JOB_TIMEOUT_MS, WAN2GP_DIR, WAN2GP_PYTHON, WAN2GP_RUNNER } from "./config.js";
+import { currentJob } from "./state.js";
 import type { MediaJob } from "./types.js";
-import { WAN2GP_DIR, WAN2GP_PYTHON, WAN2GP_RUNNER } from "./video.js";
 
 // ---------- Runners ----------
 

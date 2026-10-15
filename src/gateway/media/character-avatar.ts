@@ -14,16 +14,21 @@ import {
   saveCharacter,
 } from "../comic-characters.js";
 import { generationCudaDevice } from "../media-gpu.js";
-import { listMediaJobs } from "../media-studio.js";
 import { renderModel3d } from "../model3d.js";
-import { QWEN_LORA_DIR, qwenTurboSettings, VIGGLE_TURBO_LORA } from "./character-lora.js";
+import {
+  QWEN_LORA_DIR,
+  qwenTurboSettings,
+  VIGGLE_TURBO_LORA,
+  WAN2GP_DIR,
+  WAN2GP_PYTHON,
+} from "./config.js";
 import { acquireGpu } from "./gpu-lease.js";
 import { stopImageWorker } from "./image.js";
 import { MANGA_COMPOSE } from "./manga.js";
 import { exists, outDir } from "./paths.js";
 import { markStage, runTool, runWan2gpManifest } from "./runner.js";
+import { listMediaJobs } from "./state.js";
 import type { MediaJob } from "./types.js";
-import { WAN2GP_DIR, WAN2GP_PYTHON } from "./video.js";
 import { VOICE_FFMPEG } from "./voice-drama.js";
 
 /** Removes backgrounds (rembg, CPU) from every PNG in a folder and crops them to one box. */

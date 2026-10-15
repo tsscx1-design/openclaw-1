@@ -3,16 +3,15 @@ import * as path from "node:path";
 import { runTagger } from "../character-creator.js";
 import { getCharacter } from "../comic-characters.js";
 import { firstJsonObject } from "../comic-series.js";
-import { getMediaJob } from "../media-studio.js";
 import { motionImageNegative, type MotionScript } from "../motion-comic.js";
+import { MOTION_SCRIPT, MOTION_TIMEOUT_MS, motionModelFile, WAN2GP_PYTHON } from "./config.js";
 import { acquireGpu } from "./gpu-lease.js";
 import { stopImageWorker } from "./image.js";
 import { askScriptWriter } from "./manga.js";
-import { MOTION_SCRIPT, MOTION_TIMEOUT_MS, motionModelFile } from "./motion-comic.js";
 import { exists, outDir, resultPath } from "./paths.js";
 import { markStage, runTool } from "./runner.js";
+import { getMediaJob } from "./state.js";
 import type { MediaJob, MediaOptions } from "./types.js";
-import { WAN2GP_PYTHON } from "./video.js";
 import { VOICE_FFMPEG } from "./voice-drama.js";
 
 // ---------- joining finished films ----------

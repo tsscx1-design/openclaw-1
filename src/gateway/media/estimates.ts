@@ -9,11 +9,11 @@ import {
   MANGA_PANEL_COUNT,
 } from "../manga-script.js";
 import { generationCudaDevices, resolveGpuMode } from "../media-gpu.js";
-import { jobs, listMediaJobs, working } from "../media-studio.js";
 import { isWanImageModel } from "./config.js";
 import { resolveSwapTarget } from "./faceswap.js";
 import { joinEstimateSec } from "./motion-join.js";
 import { exists } from "./paths.js";
+import { jobs, listMediaJobs, working } from "./state.js";
 import type { ImageModel, MediaKind, MediaOptions, VideoEngine } from "./types.js";
 
 // ---------- Time estimates ----------

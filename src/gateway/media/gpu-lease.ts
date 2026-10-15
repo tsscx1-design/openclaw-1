@@ -12,10 +12,10 @@ import { registerChatModelRestore } from "../chat-model-gate.js";
 import { listCharacters, saveCharacter } from "../comic-characters.js";
 import { stopIrodoriWorker } from "../irodori-tts.js";
 import { hasDedicatedMediaGpu } from "../media-gpu.js";
-import { queue, working } from "../media-studio.js";
 import { SPECIALIST_WORKERS } from "../specialist-router.js";
 import { listVoiceProjects } from "../voice-studio.js";
 import { exists, home, lastMainCmdline, pauseFlag } from "./paths.js";
+import { queue, working } from "./state.js";
 import type { MediaJob } from "./types.js";
 
 // ---------- GPU lease ----------

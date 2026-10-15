@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { negativeTags } from "../blocked-terms-config.js";
 import { type StoreSdxlSpec, storeSpecOf } from "../model-store.js";
 import type {
+  ImageModel,
   MediaJob,
   MediaOptions,
   SdxlModel,
@@ -404,3 +405,47 @@ export const SIZES: Record<
   portrait: { image: [768, 1344], video: [480, 832] },
   landscape: { image: [1344, 768], video: [832, 480] },
 };
+
+export const WAN2GP_DIR = "D:\\media-tools\\Wan2GP";
+
+export const WAN2GP_PYTHON = path.join(WAN2GP_DIR, "venv", "Scripts", "python.exe");
+
+export const WAN2GP_RUNNER = path.join(WAN2GP_DIR, "openclaw_job.py");
+
+export const QWEN_TURBO_RUNNER = path.resolve("scripts/media/external/qwen_image_turbo_job.py");
+
+/**
+ * Qwen Image 2.1 (7B, already installed) with the Viggle Turbo LoRA: 6 steps instead of ~30, so a
+ * reference picture becomes a new view in about 25 s. The LoRA files sit in Wan2GP's loras folder.
+ */
+export const QWEN_EDIT_MODEL = "qwen_image_21_7B";
+
+export const QWEN_LORA_DIR = "D:\\media-tools\\Wan2GP\\loras\\qwen21";
+
+export const VIGGLE_TURBO_LORA = "Qwen-Image-2.1-viggle-turbo-v0.3-6step-lora-r256.safetensors";
+
+export const OUTPAINT_LORA = "qwen-image-2.1-outpaint-v2.safetensors";
+
+/** The Wan2GP settings that turn Qwen Image 2.1 into the 6-step editor (plus extra LoRAs, if any). */
+export function qwenTurboSettings(extraLoras: string[] = []): Record<string, unknown> {
+  return {
+    model_type: QWEN_EDIT_MODEL,
+    num_inference_steps: 6,
+    guidance_scale: 1,
+    sample_solver: "viggle_v02",
+    activated_loras: [...extraLoras, VIGGLE_TURBO_LORA],
+    loras_multipliers: [...extraLoras, VIGGLE_TURBO_LORA].map(() => "1").join(" "),
+    negative_prompt: "",
+  };
+}
+
+/** Motion comic runner (key images, Wan 2.2 cuts, film) and its sound effects; outside the repo. */
+export const MOTION_SCRIPT = "D:\\media-tools\\motion-comic\\motion_comic.py";
+
+/** A cut of 3 s took ~11 min at 832x480; the fast profile (640x368, Real-ESRGAN) takes ~6 min, see clips.py. */
+export const MOTION_TIMEOUT_MS = 4 * 60 * 60_000;
+
+/** The checkpoint file of the key pictures: the chosen SDXL model, else the standard one. */
+export function motionModelFile(model?: ImageModel): string {
+  return (model && isSdxlModel(model) ? sdxlSpecOf(model) : SDXL_MODELS.wai).file;
+}

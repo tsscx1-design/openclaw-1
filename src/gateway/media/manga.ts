@@ -29,7 +29,7 @@ import {
 } from "../manga-script.js";
 import { createWork, getWork, touchWork } from "../manga-works.js";
 import { generationCudaDevices } from "../media-gpu.js";
-import { isWanImageModel } from "./config.js";
+import { isWanImageModel, WAN2GP_PYTHON } from "./config.js";
 import { acquireGpu, pausedByUs, restoreChatModel } from "./gpu-lease.js";
 import { IMAGE_SERVER, renderImage, stopImageWorker } from "./image.js";
 import { exists, outDir, pauseFlag, resultPath } from "./paths.js";
@@ -42,7 +42,6 @@ import {
   productionRequest,
 } from "./text.js";
 import type { MediaJob, MediaOptions } from "./types.js";
-import { WAN2GP_PYTHON } from "./video.js";
 
 /** Typesets panels into a page with vertical bubbles (PIL, in the Wan2GP venv). */
 export const MANGA_COMPOSE = "D:\\media-tools\\image\\manga_compose.py";

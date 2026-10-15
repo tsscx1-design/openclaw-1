@@ -1,9 +1,9 @@
 import * as path from "node:path";
 import { FACEFUSION_DIR, FACEFUSION_PYTHON } from "../face-swap.js";
 import { IRODORI_DIR, irodoriInstalled } from "../irodori-tts.js";
-import { currentJob, queue, working } from "../media-studio.js";
 import {
   IMAGE_MODEL,
+  MOTION_SCRIPT,
   MUSIC_DIT,
   MUSIC_LM,
   MUSIC_MODEL_DIR,
@@ -14,14 +14,15 @@ import {
   VIDEO_MODEL,
   VIDEO_T5,
   VIDEO_VAE,
+  WAN2GP_PYTHON,
+  WAN2GP_RUNNER,
 } from "./config.js";
 import { clearStalePauseFlag } from "./gpu-lease.js";
 import { IMAGE_SERVER } from "./image.js";
 import { MANGA_COMPOSE, MANGA_FONT } from "./manga.js";
-import { MOTION_SCRIPT } from "./motion-comic.js";
 import { aceBin, exists, sdCli } from "./paths.js";
+import { currentJob, queue, working } from "./state.js";
 import type { MediaKind } from "./types.js";
-import { WAN2GP_PYTHON, WAN2GP_RUNNER } from "./video.js";
 
 export async function mediaStudioStatus(): Promise<{
   image: { ready: boolean; missing: string[] };
