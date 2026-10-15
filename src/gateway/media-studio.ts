@@ -31,44 +31,44 @@ import {
 } from "./chat-engine.js";
 import { registerChatModelRestore } from "./chat-model-gate.js";
 import {
-  lookWithOutfit,
-  type CharacterSpec,
+  breastTags,
   characterAssetDir,
-  characterOptionTags,
   characterLook,
+  characterOptionIds,
+  characterOptionTags,
+  type CharacterSpec,
   creatorSystemPrompt,
   DATASET_VIEWS,
-  breastTags,
-  characterOptionIds,
-  imageHeightTags,
-  stripBreastTags,
-  mergeLookTags,
-  parseCreatorReply,
-  specSummary,
   datasetCaption,
   getCharacter,
-  listCharacters,
+  imageHeightTags,
   type LibraryCharacter,
+  listCharacters,
+  lookWithOutfit,
+  mergeLookTags,
+  parseCreatorReply,
   resolveCast,
   saveCharacter,
-  updateCharacter,
+  specSummary,
+  stripBreastTags,
   triggerFor,
+  updateCharacter,
 } from "./comic-characters.js";
 import {
   castSystemPrompt,
   clip,
+  COMIC_OUTLINE_SCHEMA,
   COMIC_PANELS_PER_EPISODE,
   COMIC_PANELS_PER_PART,
-  COMIC_OUTLINE_SCHEMA,
-  comicScriptSchema,
   type ComicCharacter,
   type ComicPanel,
   type ComicScript,
+  comicScriptSchema,
   type ComicSeries,
   episodeOutlinePrompt,
   episodeSystemPrompt,
-  FRAME_ASPECT,
   firstJsonObject,
+  FRAME_ASPECT,
   getComicSeries,
   parseCast,
   parseComicScript,
@@ -78,17 +78,16 @@ import {
   type StagePosition,
 } from "./comic-series.js";
 import {
+  estimateSwap,
   FACEFUSION_DIR,
   FACEFUSION_PYTHON,
-  type SwapOptions,
-  estimateSwap,
   faceFusionPath,
   probeMedia,
   resolveInputFile,
   swapFrameCount,
   swapPassArgs,
 } from "./face-swap.js";
-import { readGenStyle, type GenStyle } from "./gen-style.js";
+import { type GenStyle, readGenStyle } from "./gen-style.js";
 import { enterGroupChatMode } from "./group-chat-model.js";
 import {
   IRODORI_DIR,
@@ -100,22 +99,21 @@ import { waitForChatTurnEnd } from "./main-llm-idle.js";
 import { loadBook, previouslyText, removeBook, saveBook } from "./manga-book-store.js";
 import { type PageLayout, planPage, slotAspect } from "./manga-layout.js";
 import {
-  type BookPanel,
-  type BubbleKind,
   bookOutlinePrompt,
   bookPagePrompt,
+  type BookPanel,
+  type BubbleKind,
   MANGA_DEFAULT_PAGES,
   MANGA_EXTRA_NEGATIVE,
   MANGA_MAX_PAGES,
   MANGA_MIN_PAGES,
   MANGA_PANEL_ASPECTS,
   MANGA_PANEL_COUNT,
-  type MangaLayout,
   mangaScriptSystemPrompt,
+  mergeBookCast,
   parseBookOutline,
   parseBookPage,
   parseMangaScript,
-  mergeBookCast,
 } from "./manga-script.js";
 import { createWork, getWork, touchWork } from "./manga-works.js";
 import {
@@ -125,51 +123,87 @@ import {
   mediaProcessEnv,
   resolveGpuMode,
 } from "./media-gpu.js";
+import type { MediaQualityMode, MediaVoiceTimelineCue } from "./media-production-controls.js";
+import {
+  DMD2_LORA,
+  IMAGE_MODEL,
+  isSdxlModel,
+  isWanImageModel,
+  JOB_TIMEOUT_MS,
+  KEEP_FAILED,
+  MAX_QUEUE,
+  MAX_TEXT,
+  MEDIA_MODEL_DIR,
+  MUSIC_DIT,
+  MUSIC_LM,
+  MUSIC_MODEL_DIR,
+  REMIX_HIGH,
+  REMIX_LOW,
+  RIFE_SCRIPT,
+  SDXL_MODELS,
+  sdxlModelOf,
+  sdxlSampling,
+  sdxlSpecOf,
+  SIZES,
+  VIDEO_CLIP_VISION,
+  VIDEO_MODEL,
+  VIDEO_T5,
+  VIDEO_VAE,
+  videoNegative,
+} from "./media/config.js";
+import {
+  aceBin,
+  exists,
+  home,
+  lastMainCmdline,
+  outDir,
+  pauseFlag,
+  resultPath,
+  sdCli,
+} from "./media/paths.js";
 import type {
-  MediaProductionOptions,
-  MediaQualityMode,
-  MediaVoiceTimelineCue,
-} from "./media-production-controls.js";
+  ImageModel,
+  MediaJob,
+  MediaKind,
+  MediaOptions,
+  SdcppVideoEngine,
+  SdxlModel,
+  VideoEngine,
+  WanImageModel,
+} from "./media/types.js";
 import { adultLead, adultSentence } from "./minor-safeguards.js";
-import { isStoreModelId, storeSpecOf, type StoreSdxlSpec } from "./model-store.js";
+import { isStoreModelId, storeSpecOf } from "./model-store.js";
 import { renderModel3d } from "./model3d.js";
 import {
-  motionImageNegative,
-  type MotionMinutes,
-  type MotionScript,
-  type MotionPhase,
-  type MotionTemplateId,
-  type MotionOptionId,
   MOTION_TEMPLATES,
-  motionOptionNotes,
   motionCuts,
+  motionImageNegative,
   motionKeyJobs,
+  type MotionMinutes,
+  motionOptionNotes,
+  type MotionPhase,
+  type MotionScript,
   motionSummary,
   motionSystemPrompt,
   parseMotionScript,
 } from "./motion-comic.js";
 import {
   applyMotionFlow,
-  type VoiceDrama,
   DEFAULT_MOTION_SFX,
   MOTION_TALK,
   phasesInFlow,
   sfxForCut,
   talkNote,
+  type VoiceDrama,
   voiceStyleNote,
-  type MotionFlowStep,
-  type MotionSfxId,
-  type MotionTalk,
-  type MotionVoiceStyle,
 } from "./motion-extras.js";
-import { resolveOpenClawHome } from "./partner-store.js";
 import { referenceClip } from "./partner-voice-clone.js";
 import { analyzePhoto, createFaceReference } from "./photo-analysis.js";
 import {
   adultBaseFile,
-  PRECISE_SAMPLE_KEYS,
   loadSampleDescriptions,
   loadSampleIndex,
+  PRECISE_SAMPLE_KEYS,
   resolveSampleSubject,
   sampleFileName,
   samplePrompt,
@@ -183,6 +217,16 @@ import {
   waitForWorkerReady,
 } from "./specialist-router.js";
 import { listVoiceProjects } from "./voice-studio.js";
+export {
+  type ImageModel,
+  type MediaJob,
+  type MediaJobStatus,
+  type MediaKind,
+  type MediaOptions,
+  type VideoEngine,
+  type WanImageModel,
+} from "./media/types.js";
+export { isWanImageModel, sdxlSampling } from "./media/config.js";
 
 // Local image / video / music generation on the RTX 4060 (8 GB).
 // The main chat LLM holds almost all VRAM, so a job stops it (the watchdog pause flag keeps it
@@ -191,668 +235,6 @@ import { listVoiceProjects } from "./voice-studio.js";
 //   video: stable-diffusion.cpp vid_gen + Wan 2.2 14B Rapid AIO NSFW (image-to-video, 4 steps);
 //          text-to-video renders a still with the image model first, then animates it
 //   music: acestep.cpp (ace-lm + ace-synth) + ACE-Step 1.5 turbo; lyrics are written by its LM
-
-export type MediaKind =
-  | "image"
-  | "video"
-  | "music"
-  | "manga"
-  | "comic"
-  | "voice"
-  | "motion"
-  | "faceswap";
-export type MediaJobStatus = "queued" | "running" | "done" | "error";
-
-export type MediaJob = {
-  id: string;
-  kind: MediaKind;
-  status: MediaJobStatus;
-  /** What the user asked for, as typed. */
-  request: string;
-  /** Short Japanese progress note for the app. */
-  stage?: string;
-  createdAt: number;
-  startedAt?: number;
-  finishedAt?: number;
-  durationSec?: number;
-  error?: string;
-  /** Milliseconds per stage, kept with the result to diagnose slow runs. */
-  timings?: Record<string, number>;
-  file?: string;
-  mime?: string;
-  options: MediaOptions;
-  /** Prompt used by generators after character and scene continuity have been resolved. */
-  productionPrompt?: string;
-  /** Result of the optional post-generation quality pass. */
-  quality?: { mode: MediaQualityMode; status: "done" | "warning"; note: string };
-  /** Set when the user deletes the job while it runs; the runner then discards it. */
-  cancelRequested?: boolean;
-  /**
-   * Started from a conversation (the generation assistant): the chat model is still writing its
-   * reply, so the job waits for it before taking the GPU, and its end is announced to that
-   * partner's chat (or the phone when no partner is named).
-   */
-  chat?: { partnerId?: string };
-  /** motion: the working folder (script, voices, key images, cuts) and whether this is a draft */
-  motion?: { dir: string; draft?: boolean; preview?: boolean };
-  /** About how many seconds the job takes (set when it starts; the app shows what is left). */
-  estimateSec?: number;
-  /** Pictures of this job are drawn on both GPUs at once (stage text comes from the first). */
-  parallelPictures?: boolean;
-  /** manga: the title and each panel's words, as written by the script writer. */
-  manga?: { title: string; lines: string[]; volume?: number; cover?: boolean };
-  /** comic: an episode is several strips (parts); file is the first. */
-  files?: string[];
-  comic?: {
-    seriesId: string;
-    episodeNo?: number;
-    title?: string;
-    character?: string;
-    characterId?: string;
-    view?: "front" | "turnaround" | "three_view" | "360";
-    /** A sheet drawn in the adult version. */
-    adult?: boolean;
-    /** A picture of the sample factory (not a sheet of the character). */
-    sample?: boolean;
-    targetJobId?: string;
-    panel?: number;
-  };
-};
-
-export type MediaOptions = {
-  /** image/video framing */
-  aspect?: "square" | "portrait" | "landscape";
-  /** video: animate this finished image job instead of drawing a new still */
-  sourceImageJobId?: string;
-  /** video: base64 image supplied by the app */
-  sourceImageBase64?: string;
-  /**
-   * video engine: "standard" = sd.cpp + Wan 2.2 14B Rapid NSFW (2 s); the others run in Wan2GP:
-   * "long" = Wan 2.2 SVI 2 Pro Lightning (sliding windows), "audio" = LTX-2 distilled with sound,
-   * "fast" = FastWan 2.2 5B (3 steps).
-   */
-  engine?: VideoEngine;
-  /** video: interpolate to twice the frame rate (RIFE) so motion looks smoother; same length */
-  smooth?: boolean;
-  /** image model for images and for the first frame of text-to-video */
-  imageModel?: ImageModel;
-  /** SDXL (not V-Pred): sample in 8 steps with the DMD2 LoRA, about 3x faster, slightly different look */
-  fast?: boolean;
-  /** music, and video length for the Wan2GP engines */
-  lyrics?: string;
-  instrumental?: boolean;
-  durationSec?: number;
-  /** manga: a vertical 4-panel strip, one page of five panels, or a multi-page book */
-  mangaLayout?: MangaLayout;
-  /** manga "book": how many pages (2-16) */
-  mangaPages?: number;
-  /** manga "book": the job of the volume this one continues (same cast, story carried on) */
-  mangaSequelOf?: string;
-  /** manga "book": false = only the characters picked from the library, nobody new is made */
-  mangaAutoCast?: boolean;
-  /** manga "book": false = no cover (the default is to draw one as the first file) */
-  mangaCover?: boolean;
-  /** manga: "mono" makes black-and-white pages with screentone; the default keeps the colours */
-  mangaTone?: "color" | "mono";
-  /** comic: the series, and what to do (a new episode, a character sheet, redraw one panel) */
-  comicSeriesId?: string;
-  comicTask?:
-    | "episode"
-    | "sheet"
-    | "redraw"
-    | "lora"
-    | "outpaint"
-    | "avatar"
-    | "sample"
-    | "model3d"
-    | "mini";
-  /** sample: the setting ("opt:<id>", "motion:<id>", "pose:<id>", "custom:<id>"), the base picture and an instruction. */
-  sampleKey?: string;
-  sampleBase?: "normal" | "adult";
-  /** The editor for a sample: "fast" (Qwen Image 2.1, 6 steps, the default), "precise" (30 steps) or "edit2509". */
-  sampleEngine?: "fast" | "precise" | "edit2509";
-  sampleNote?: string;
-  /** sample: many settings in one job (a whole genre); the model loads once and both GPUs share the work. */
-  sampleKeys?: string[];
-  /** sample: make the adult base picture itself (the standing picture without clothes). */
-  sampleAdultBase?: boolean;
-  /** outpaint: how much to add on each side, as a fraction of the picture (0.5 = half as much again) */
-  comicOutpaint?: { top: number; bottom: number; left: number; right: number };
-  comicCharacter?: string;
-  /** sheet / lora: the character library entry */
-  comicCharacterId?: string;
-  /** voice: speak with this voice-studio voice, or a voice described in words */
-  voiceId?: string;
-  voiceCaption?: string;
-  /** 2人目キャラクターID（2人シーン用） */
-  motionCharacterId2?: string;
-  /** 2人目衣装名（2人シーン用） */
-  motionOutfit2?: string;
-  /** voice: Irodori model ("large" is more natural; the GPU is taken for it) */
-  irodoriModel?: "small" | "large" | "fast";
-  /** voice: write a long audio drama about the request (minutes) with a background sound, instead of reading the lines given */
-  voiceDrama?: VoiceDrama;
-  /**
-   * When true, the gateway requests phoneme-level timing from Irodori TTS so the
-   * motion-comic renderer can drive lip-sync frame-accurately.
-   * Requires Irodori ≥ 2.1 with the /phonemes endpoint.
-   */
-  phonemeTimingSync?: boolean;
-  /** sheet: one front view (the training reference) or a front/side/back turnaround */
-  /** sheet view mode:
-   *  front      = 正面立ち絵1枚（学習用リファレンス）
-   *  three_view = 三面図（正面・側面・背面を横並びで正確なレイアウト）
-   *  360        = 360度ターンアラウンド（8方向、2×4グリッド）
-   *  (旧) turnaround はthree_viewの別名として互換維持
-   */
-  comicSheetView?: "front" | "three_view" | "360" | "turnaround";
-  /** sheet: generate nude / adult version alongside */
-  comicSheetAdult?: boolean;
-  /** sheet (front view): the pose she is drawn in (Japanese or English; empty = standing, arms at the sides) */
-  comicSheetPose?: string;
-  /** sheet: base64 reference photo for character creation from image */
-  comicSheetRefImageBase64?: string;
-  comicTargetJobId?: string;
-  comicPanel?: number;
-  /** sheet: draw the character in this outfit (by name) */
-  comicOutfit?: string;
-  /** motion: about how long the film is, and whether it ends with fellatio (else the writer decides) */
-  motionMinutes?: MotionMinutes;
-  motionFellatio?: boolean;
-  /** motion: the heroine is this character library entry (look, and its LoRA once trained) */
-  motionCharacterId?: string;
-  /** motion: stop after the key images and show them (a draft to approve before the video) */
-  motionDraft?: boolean;
-  /** motion: position / scene template (MOTION_TEMPLATES), and the heroine's outfit by name */
-  motionTemplate?: MotionTemplateId;
-  motionOutfit?: string;
-  /** motion: any number of options (piercings, womb tattoo, collar, bondage, fainting, virgin...) */
-  motionOptions?: MotionOptionId[];
-  /** motion: continue a copy of this draft job; with motionRedrawKeys, redraw those first */
-  motionContinueJobId?: string;
-  /** Rebuild the soundtrack of a finished motion comic, keeping its generated images and cuts. */
-  motionRevoiceJobId?: string;
-  motionRedrawKeys?: string[];
-  /** motion: 多人数シーン（2〜4人）の人数 */
-  motionSceneCount?: number;
-  /** motion: 3人目キャラクターID */
-  motionCharacterId3?: string;
-  motionOutfit3?: string;
-  /** motion: 4人目キャラクターID */
-  motionCharacterId4?: string;
-  motionOutfit4?: string;
-  /** motion: 前段シーン（着衣→脱衣→挿入）カスタムステップ */
-  motionApproachSteps?: Array<{ label: string; tags: string; fontStyle: string }>;
-  /** motion: how much she talks, kinds of voice, effect sounds, and the order of the cuts */
-  motionTalk?: MotionTalk;
-  motionVoiceStyles?: MotionVoiceStyle[];
-  motionSfx?: MotionSfxId[];
-  motionFlow?: MotionFlowStep[];
-  /** motion: take the cast, voice, look and place from this finished motion comic */
-  motionInheritJobId?: string;
-  /** motion: join these finished films in order, with a made-up bridge of this many seconds between each */
-  motionJoinJobIds?: string[];
-  motionBridgeSeconds?: number;
-  /** motion join: where each film ends (seconds from its start; null keeps it whole), to branch into another position from the middle */
-  motionJoinTrimSec?: Array<number | null>;
-  /** image: make this finished picture sharper and larger with SeedVR2 (the shortest edge becomes upscaleResolution) */
-  upscaleSourceJobId?: string;
-  upscaleResolution?: number;
-  upscaleModel?: "3b" | "7b";
-  /** motion: the model the key pictures are drawn with */
-  motionImageModel?: ImageModel;
-  /** motion: stop after one sample picture, to be approved before the rest is made (default on) */
-  motionPreview?: boolean;
-} & SwapOptions &
-  MediaProductionOptions;
-
-/** "standard" and "remix" run in sd.cpp; the others in Wan2GP. */
-export type VideoEngine = "standard" | "remix" | "long" | "audio" | "fast" | "h3";
-type SdcppVideoEngine = "standard" | "remix";
-export type ImageModel =
-  | "wai" // WAI Illustrious SDXL（アニメ標準）
-  | "noobai" // NoobAI XL V-Pred（アニメ成人向け強）
-  | "zimage" // Z-Image Turbo（構図が正確・日本人の実写も自然）
-  | "anima" // Anima 2B（ComfyUI・アニメ絵。タグと文章の両方で指示できる）
-  | "klein" // FLUX.2 Klein 9B（Wan2GP・4ステップの高速モデル。文章の指示に強い）
-  | "qwenimg" // Qwen Image 2.1（Wan2GP・6ステップ。文章の指示と日本語に強い）
-  | "qwenimgturbo" // Qwen Image 2.1 Turbo（Wan2GP・公式8ステップ。高速生成）
-  | "lustify" // Lustify V9 Zenith（実写）
-  | "cyberreal" // CyberRealistic XL（実写・高解像）
-  | "asianreal" // Asian Realism（アジア系実写）
-  | "hassaku" // Hassaku XL (Illustrious) v3.4（アニメ・癖のない明るい絵）
-  | "illustrious" // Illustrious XL 1.1（アニメ・本家の土台）
-  | "novaanime" // Nova Anime XL IL v19（アニメ・2.5D寄り）
-  | "plantmilk" // Plant Milk Walnut（アニメ・Illustrious と NoobAI の混ぜモデル）
-  | "juggernaut" // Juggernaut XL Ragnarok（実写・定番）
-  | "realvis" // RealVisXL V5.0（実写・人物写真）
-  | "realismil" // Realism Illustrious v5.5（半実写・booru タグで指示）
-  | "illust2" // Illustrious XL 2.0（アニメ・本家の土台の後継）
-  | "animagine" // Animagine XL 4.0 opt（アニメ・タグで指示）
-  | "rouwei" // RouWei 0.8 epsilon（アニメ・成人向けも可）
-  | "chenkin" // ChenkinNoob-XL V0.5（アニメ・NoobAI系）
-  | "janku" // JANKU v7.77（アニメ・成人向け）
-  | "ntrmix" // NTR MIX XIII（アニメ・濃いめ塗り）
-  | "desire" // Anime Desire v3（アニメ・成人向け）
-  | "cyberanime" // CyberIllustrious Anime V4.0（アニメ）
-  | "cybersemi" // CyberIllustrious Semi-Real V3.0（半実写）
-  | "pencil" // illustrious_pencil-XL v5（アニメ・日本寄りのイラスト）
-  | "cyberpony" // CyberRealistic Pony V18（実写・成人向けも可）
-  | `st_${string}`; // a model downloaded from the model store (SDXL type)
-/** Still-image models that run in Wan2GP instead of the SDXL image worker. */
-export type WanImageModel = "zimage" | "klein" | "qwenimg" | "qwenimgturbo";
-export function isWanImageModel(model: unknown): model is WanImageModel {
-  return model === "zimage" || model === "klein" || model === "qwenimg" || model === "qwenimgturbo";
-}
-/** Models that are neither Wan2GP nor SDXL checkpoints: Anima runs in ComfyUI. */
-const isSdxlModel = (model: unknown): model is SdxlModel =>
-  Boolean(model) && !isWanImageModel(model) && model !== "anima";
-type SdxlModel = Exclude<ImageModel, WanImageModel | "anima">;
-type StaticSdxlModel = Exclude<SdxlModel, `st_${string}`>;
-type SdxlSampler = "euler_a" | "dpmpp_2m_sde_karras" | "lcm";
-
-const MEDIA_MODEL_DIR = "D:\\media-models";
-const IMAGE_MODEL = path.join(MEDIA_MODEL_DIR, "image", "waiIllustriousSDXL_v170.safetensors");
-/** DMD2 4-step LoRA (tianweiy/DMD2); with LCM it works on SDXL epsilon checkpoints, not V-Pred. */
-const DMD2_LORA = path.join(
-  MEDIA_MODEL_DIR,
-  "image",
-  "lora",
-  "dmd2_sdxl_4step_lora_fp16.safetensors",
-);
-const DMD2_SETTINGS = { sampler: "lcm" as SdxlSampler, steps: 8, cfg: 1.5 };
-
-const PHOTO_NEGATIVE =
-  "cartoon, illustration, anime, painting, CGI, 3D render, low quality, worst quality, blurry, bad anatomy, bad hands, extra fingers, deformed, watermark, logo, text";
-
-/** SDXL checkpoints served by the resident worker; Z-Image runs in Wan2GP instead. */
-const SDXL_MODELS: Record<
-  StaticSdxlModel,
-  {
-    file: string;
-    vpred: boolean;
-    /** Photo-real checkpoints get descriptive phrases instead of danbooru tags. */
-    photo: boolean;
-    sampler: SdxlSampler;
-    steps: number;
-    cfg: number;
-    quality: string;
-    negative: string;
-  }
-> = {
-  wai: {
-    file: IMAGE_MODEL,
-    vpred: false,
-    photo: false,
-    sampler: "euler_a",
-    steps: 28,
-    cfg: 6,
-    quality: "masterpiece, best quality, amazing quality, very aesthetic, absurdres",
-    negative:
-      "lowres, worst quality, bad quality, bad anatomy, bad hands, extra digits, fewer digits, jpeg artifacts, signature, watermark, username, blurry, sketch",
-  },
-  // NoobAI-XL V-Pred 1.0: recommended Euler with CFG 3.5-5.5 and 28-35 steps.
-  noobai: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "NoobAI-XL-Vpred-v1.0.safetensors"),
-    vpred: true,
-    photo: false,
-    sampler: "euler_a",
-    steps: 30,
-    cfg: 4.5,
-    quality: "masterpiece, best quality, newest, absurdres, highres",
-    negative:
-      "worst quality, old, early, low quality, lowres, signature, username, logo, bad hands, mutated hands, bad anatomy, watermark",
-  },
-  // LUSTIFY V9 Zenith (photo-real, uncensored): DPM++ 2M SDE Karras, ~30 steps, CFG 4-7.
-  lustify: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "lustifyNSFWCheckpoint_zenithV9.safetensors"),
-    vpred: false,
-    photo: true,
-    sampler: "dpmpp_2m_sde_karras",
-    steps: 30,
-    cfg: 4.5,
-    quality: "photograph, realistic, high detail, sharp focus",
-    negative: PHOTO_NEGATIVE,
-  },
-  // CyberRealistic XL Play v10: DPM++ 2M SDE Karras, 30+ steps, CFG 3-5.
-  cyberreal: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "CyberRealisticXLPlay_V10.0_FP16.safetensors"),
-    vpred: false,
-    photo: true,
-    sampler: "dpmpp_2m_sde_karras",
-    steps: 30,
-    cfg: 4,
-    quality: "photograph, realistic, high detail, sharp focus",
-    negative: PHOTO_NEGATIVE,
-  },
-  // Asian Realism by Stable Yogi (Illustrious) v2.0: East Asian faces; DPM++ 2M Karras, 20-30 steps, CFG 5-7.
-  asianreal: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "asianRealismByStable_v20FP16.safetensors"),
-    vpred: false,
-    photo: true,
-    sampler: "dpmpp_2m_sde_karras",
-    steps: 28,
-    cfg: 5,
-    quality: "photograph, realistic, high detail, sharp focus",
-    negative: PHOTO_NEGATIVE,
-  },
-  // Hassaku XL (Illustrious) v3.4: a clean, style-neutral merge; Euler a, CFG 5-6.
-  hassaku: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "hassakuXL_illustrious_v34.safetensors"),
-    vpred: false,
-    photo: false,
-    sampler: "euler_a",
-    steps: 28,
-    cfg: 5.5,
-    quality: "masterpiece, best quality, amazing quality, very aesthetic, absurdres",
-    negative:
-      "lowres, worst quality, bad quality, bad anatomy, bad hands, extra digits, fewer digits, jpeg artifacts, signature, watermark, username, blurry, sketch",
-  },
-  // Illustrious XL 1.1 (official): the base most LoRAs are made for; Euler a, CFG 5.
-  illustrious: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "Illustrious-XL-v1.1.safetensors"),
-    vpred: false,
-    photo: false,
-    sampler: "euler_a",
-    steps: 28,
-    cfg: 5,
-    quality: "masterpiece, best quality, very aesthetic, absurdres",
-    negative:
-      "lowres, worst quality, bad quality, bad anatomy, bad hands, extra digits, fewer digits, jpeg artifacts, signature, watermark, username, blurry, sketch",
-  },
-  // Nova Anime XL IL v19 (NoobAI EPS + Illustrious merge, epsilon): Euler a, CFG 4-6.
-  novaanime: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "novaAnimeXL_ilV190.safetensors"),
-    vpred: false,
-    photo: false,
-    sampler: "euler_a",
-    steps: 28,
-    cfg: 5,
-    quality: "masterpiece, best quality, newest, absurdres, highres, very aesthetic",
-    negative:
-      "worst quality, old, early, low quality, lowres, signature, username, logo, bad hands, mutated hands, bad anatomy, watermark",
-  },
-  // Plant Milk Walnut (Illustrious / NoobAI merge): Euler a, CFG 5.
-  plantmilk: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "plantMilk_walnut_illustrious.safetensors"),
-    vpred: false,
-    photo: false,
-    sampler: "euler_a",
-    steps: 28,
-    cfg: 5,
-    quality: "masterpiece, best quality, amazing quality, very aesthetic, absurdres",
-    negative:
-      "lowres, worst quality, bad quality, bad anatomy, bad hands, extra digits, fewer digits, jpeg artifacts, signature, watermark, username, blurry, sketch",
-  },
-  // Juggernaut XL Ragnarok (photo-real): DPM++ 2M SDE Karras, ~30 steps, CFG 3-6.
-  juggernaut: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "juggernautXL_ragnarok.safetensors"),
-    vpred: false,
-    photo: true,
-    sampler: "dpmpp_2m_sde_karras",
-    steps: 30,
-    cfg: 4.5,
-    quality: "photograph, realistic, high detail, sharp focus",
-    negative: PHOTO_NEGATIVE,
-  },
-  // RealVisXL V5.0 (photo-real portraits): DPM++ 2M SDE Karras, 25-30 steps, CFG 4-6.
-  realvis: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "RealVisXL_V5.0_fp16.safetensors"),
-    vpred: false,
-    photo: true,
-    sampler: "dpmpp_2m_sde_karras",
-    steps: 30,
-    cfg: 5,
-    quality: "photograph, realistic, high detail, sharp focus",
-    negative: PHOTO_NEGATIVE,
-  },
-  // Illustrious XL 2.0（アニメ・本家の土台の後継）
-  illust2: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "Illustrious-XL-v2.0.safetensors"),
-    vpred: false,
-    photo: false,
-    sampler: "euler_a",
-    steps: 28,
-    cfg: 5.5,
-    quality: "masterpiece, best quality, newest, absurdres, highres, very aesthetic",
-    negative:
-      "worst quality, old, early, low quality, lowres, signature, username, logo, bad hands, mutated hands, bad anatomy, watermark",
-  },
-  // Animagine XL 4.0 opt（アニメ・タグで指示）
-  animagine: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "animagine-xl-4.0-opt.safetensors"),
-    vpred: false,
-    photo: false,
-    sampler: "euler_a",
-    steps: 28,
-    cfg: 5,
-    quality: "masterpiece, high score, great score, absurdres",
-    negative:
-      "lowres, bad anatomy, bad hands, text, error, missing finger, extra digits, fewer digits, cropped, worst quality, low quality, low score, bad score, average score, signature, watermark, username, blurry",
-  },
-  // RouWei 0.8 epsilon（アニメ・成人向けも可）
-  rouwei: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "rouwei_080_epsilon_fp16.safetensors"),
-    vpred: false,
-    photo: false,
-    sampler: "euler_a",
-    steps: 26,
-    cfg: 6,
-    quality: "masterpiece, best quality, newest, absurdres, highres, very aesthetic",
-    negative:
-      "worst quality, old, early, low quality, lowres, signature, username, logo, bad hands, mutated hands, bad anatomy, watermark",
-  },
-  // ChenkinNoob-XL V0.5（アニメ・NoobAI系）
-  chenkin: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "ChenkinNoob-XL-V0.5.safetensors"),
-    vpred: false,
-    photo: false,
-    sampler: "euler_a",
-    steps: 28,
-    cfg: 5.5,
-    quality: "masterpiece, best quality, newest, high resolution, aesthetic, excellent",
-    negative:
-      "worst quality, old, early, low quality, lowres, signature, username, logo, bad hands, mutated hands, bad anatomy, watermark",
-  },
-  // JANKU v7.77（アニメ・成人向け）
-  janku: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "JANKUTrainedChenkinNoobai_v777.safetensors"),
-    vpred: false,
-    photo: false,
-    sampler: "euler_a",
-    steps: 28,
-    cfg: 4,
-    quality: "masterpiece, best quality, newest, absurdres, highres, very aesthetic",
-    negative:
-      "worst quality, old, early, low quality, lowres, signature, username, logo, bad hands, mutated hands, bad anatomy, watermark",
-  },
-  // NTR MIX XIII（アニメ・濃いめ塗り）
-  ntrmix: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "ntrMIXIllustriousXL_xiii.safetensors"),
-    vpred: false,
-    photo: false,
-    sampler: "euler_a",
-    steps: 25,
-    cfg: 5.5,
-    quality: "masterpiece, best quality, newest, absurdres, highres, very aesthetic",
-    negative:
-      "worst quality, old, early, low quality, lowres, signature, username, logo, bad hands, mutated hands, bad anatomy, watermark",
-  },
-  // Anime Desire v3（アニメ・成人向け）
-  desire: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "animeDesireIllustrious_v3.safetensors"),
-    vpred: false,
-    photo: false,
-    sampler: "euler_a",
-    steps: 28,
-    cfg: 5,
-    quality: "best quality, masterpiece, absurdres, newest",
-    negative:
-      "worst quality, old, early, low quality, lowres, signature, username, logo, bad hands, mutated hands, bad anatomy, watermark",
-  },
-  // CyberIllustrious Anime V4.0（アニメ）
-  cyberanime: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "CyberIllustrious_Anime_V4.0.safetensors"),
-    vpred: false,
-    photo: false,
-    sampler: "euler_a",
-    steps: 30,
-    cfg: 5,
-    quality: "masterpiece, best quality, newest, absurdres, highres, very aesthetic",
-    negative:
-      "worst quality, old, early, low quality, lowres, signature, username, logo, bad hands, mutated hands, bad anatomy, watermark",
-  },
-  // CyberIllustrious Semi-Real V3.0（半実写）
-  cybersemi: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "CyberIllustrious_Semi-Real_V3.0.safetensors"),
-    vpred: false,
-    photo: false,
-    sampler: "euler_a",
-    steps: 30,
-    cfg: 5,
-    quality: "masterpiece, best quality, newest, absurdres, highres, realistic",
-    negative:
-      "worst quality, old, early, low quality, lowres, signature, username, logo, bad hands, mutated hands, bad anatomy, watermark",
-  },
-  // illustrious_pencil-XL v5（アニメ・日本寄りのイラスト）
-  pencil: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "illustrious_pencil-XL-v5.0.0.safetensors"),
-    vpred: false,
-    photo: false,
-    sampler: "euler_a",
-    steps: 28,
-    cfg: 5,
-    quality: "masterpiece, best quality, newest, absurdres, highres, very aesthetic",
-    negative:
-      "worst quality, old, early, low quality, lowres, signature, username, logo, bad hands, mutated hands, bad anatomy, watermark",
-  },
-  // CyberRealistic Pony V18（実写・成人向けも可）
-  cyberpony: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "CyberRealisticPony_V18.0_F16.safetensors"),
-    vpred: false,
-    photo: true,
-    sampler: "euler_a",
-    steps: 30,
-    cfg: 5,
-    quality: "score_9, score_8_up, score_7_up, photograph, realistic, high detail",
-    negative:
-      "score_6, score_5, score_4, cartoon, illustration, anime, painting, CGI, 3D render, low quality, worst quality, blurry, bad anatomy, bad hands, extra fingers, deformed, watermark, logo, text",
-  },
-  // Realism Illustrious v5.5 (semi-real, Illustrious): booru tags; Euler a, CFG 4-6.
-  realismil: {
-    file: path.join(MEDIA_MODEL_DIR, "image", "realismIllustrious_v55FP16.safetensors"),
-    vpred: false,
-    photo: false,
-    sampler: "euler_a",
-    steps: 28,
-    cfg: 5,
-    quality: "realistic, photorealistic, masterpiece, best quality, very aesthetic, absurdres",
-    negative:
-      "anime, cartoon, illustration, 3d, lowres, worst quality, bad quality, bad anatomy, bad hands, extra digits, fewer digits, jpeg artifacts, signature, watermark, username, blurry, sketch",
-  },
-};
-
-/** Settings of an SDXL model: a built-in one, or one downloaded from the model store. */
-function sdxlSpecOf(model: SdxlModel): StoreSdxlSpec {
-  return SDXL_MODELS[model as StaticSdxlModel] ?? storeSpecOf(model) ?? SDXL_MODELS.wai;
-}
-
-/** The SDXL model a job uses; anything else (unset, Z-Image's sd.cpp fallback) means WAI. */
-function sdxlModelOf(job: MediaJob): SdxlModel {
-  const model = job.options.imageModel;
-  return isSdxlModel(model) ? model : "wai";
-}
-
-/** Sampling settings for an SDXL job; "fast" swaps in DMD2 where the checkpoint allows it. */
-export function sdxlSampling(
-  model: SdxlModel,
-  fast: boolean,
-): { sampler: SdxlSampler; steps: number; cfg: number; lora?: string } {
-  const spec = sdxlSpecOf(model);
-  // CFG stays above 1 so the negative prompt (including the adult-only one) still applies.
-  if (fast && !spec.vpred) return { ...DMD2_SETTINGS, lora: DMD2_LORA };
-  return { sampler: spec.sampler, steps: spec.steps, cfg: spec.cfg };
-}
-const VIDEO_DIR = path.join(MEDIA_MODEL_DIR, "video");
-const VIDEO_MODEL = path.join(VIDEO_DIR, "wan2.2-i2v-rapid-aio-v10-nsfw-Q3_K_S.gguf");
-const VIDEO_VAE = path.join(VIDEO_DIR, "wan_2.1_vae.safetensors");
-const VIDEO_T5 = path.join(VIDEO_DIR, "umt5-xxl-encoder-Q8_0.gguf");
-const VIDEO_CLIP_VISION = path.join(VIDEO_DIR, "clip_vision_h.safetensors");
-// Wan 2.2 Remix v3 I2V (photo-real, uncensored): MoE pair, 4-8 steps at CFG 1, shift 5-10.
-const REMIX_HIGH = path.join(VIDEO_DIR, "remix", "wan22RemixT2VI2V_i2vHighV30-Q3_K_M.gguf");
-const REMIX_LOW = path.join(VIDEO_DIR, "remix", "wan22RemixT2VI2V_i2vLowV30-Q3_K_M.gguf");
-/** RIFE v4.26 frame interpolation (Wan2GP's weights) for the sd.cpp engines. */
-const RIFE_SCRIPT = "D:\\media-tools\\image\\rife_video.py";
-const MUSIC_MODEL_DIR = path.join(MEDIA_MODEL_DIR, "music");
-// acestep.cpp looks models up by full file name, .gguf included.
-const MUSIC_LM = "acestep-5Hz-lm-4B-Q8_0.gguf";
-const MUSIC_DIT = "acestep-v15-turbo-Q8_0.gguf";
-
-const JOB_TIMEOUT_MS = 40 * 60_000;
-const MAX_QUEUE = 4;
-/** Finished results are kept until the user deletes them; only failed attempts are trimmed. */
-const KEEP_FAILED = 30;
-const MAX_TEXT = 500;
-
-const VIDEO_NEGATIVE =
-  "static, still image, blurry, low quality, distorted, deformed, extra limbs, flicker, watermark, text";
-
-/**
- * 動画のネガティブ。dist/blocked-terms.json の videoNegative を、どの動画にも足す。
- * 成人向けのときは adultOnly も足す。
- */
-function videoNegative(sexual: boolean): string {
-  return [VIDEO_NEGATIVE, negativeTags("videoNegative"), sexual ? negativeTags("adultOnly") : ""]
-    .filter(Boolean)
-    .join(", ");
-}
-
-const SIZES: Record<
-  NonNullable<MediaOptions["aspect"]>,
-  { image: [number, number]; video: [number, number] }
-> = {
-  square: { image: [1024, 1024], video: [624, 624] },
-  // SDXL buckets with the same shape as the video frame, so a first frame needs no crop
-  portrait: { image: [768, 1344], video: [480, 832] },
-  landscape: { image: [1344, 768], video: [832, 480] },
-};
-
-// ---------- Paths ----------
-
-function home(): string {
-  return resolveOpenClawHome();
-}
-function sdCli(): string {
-  return path.join(home(), "image", "bin-cuda", "sd-cli.exe");
-}
-function aceBin(name: "ace-lm" | "ace-synth"): string {
-  return path.join(home(), "music", "src", "build", "Release", `${name}.exe`);
-}
-function outDir(): string {
-  return path.join(home(), "media", "out");
-}
-
-/** Finished files live in one folder per kind (out/image, out/video, out/music). */
-async function resultPath(job: MediaJob, ext: string): Promise<string> {
-  const dir = path.join(outDir(), job.kind);
-  await fs.mkdir(dir, { recursive: true });
-  return path.join(dir, `${job.id}${ext}`);
-}
-function pauseFlag(): string {
-  return path.join(home(), "bonsai", "llm-pause.flag");
-}
-function lastMainCmdline(): string {
-  return path.join(home(), "bonsai", "last_main_cmdline.txt");
-}
-
-async function exists(file: string): Promise<boolean> {
-  try {
-    await fs.access(file);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export async function mediaStudioStatus(): Promise<{
   image: { ready: boolean; missing: string[] };
@@ -1191,11 +573,13 @@ async function toMusicCaption(request: string): Promise<string> {
 // ---------- GPU lease ----------
 
 let pausedByUs = false;
+
 /**
  * The chat model comes back this long after the last job, not at once: jobs often follow each other
  * and every restart costs 1-1.5 minutes of loading. A chat message brings it back sooner.
  */
 const CHAT_RESTORE_DELAY_MS = 10 * 60_000;
+
 let chatRestoreTimer: ReturnType<typeof setTimeout> | undefined;
 
 function cancelChatRestoreTimer(): void {
@@ -1393,6 +777,7 @@ async function restoreStuckChatModel(): Promise<void> {
   pausedByUs = true;
   await restoreChatModel().catch(() => undefined);
 }
+
 if (!process.env.VITEST) {
   const stuck = setTimeout(
     () =>
@@ -1420,6 +805,7 @@ function markStage(job: MediaJob, stage: string): void {
 
 /** The job being worked on and the tool process it runs; a delete stops them. */
 let currentJob: MediaJob | undefined;
+
 const activeChildren = new Set<ReturnType<typeof spawn>>();
 
 /** Stops a tool and everything it started (Wan2GP spawns its own workers). */
@@ -1561,8 +947,10 @@ function stepNote(prefix: string, job: MediaJob) {
 // the GPU goes back to the chat model.
 
 const IMAGE_SERVER = "D:\\media-tools\\image\\sdxl_server.py";
+
 /** After the queue drains, wait this long for another job before handing the GPU back. */
 const IMAGE_GRACE_MS = 45_000;
+
 /**
  * One resident worker per GPU: slot 0 is the first GPU (the one every job uses); slot 1 is the
  * second GPU, started only when a job spreads its pictures over both (a multi-page manga).
@@ -1572,7 +960,9 @@ type ImageWorkerSlot = {
   ready?: Promise<void>;
   device?: string;
 };
+
 const imageSlots: ImageWorkerSlot[] = [{}, {}];
+
 const imageRequests = new Map<
   string,
   { resolve: () => void; reject: (err: Error) => void; onStep: (step: string) => void }
@@ -2094,6 +1484,7 @@ const TIMELINE_SFX: Record<"thrust" | "spank" | "wet", string> = {
 };
 
 const VOICE_FFMPEG = "D:\\media-tools\\Wan2GP\\ffmpeg_bins\\ffmpeg.exe";
+
 const VOICE_MAX_LINES = 40;
 
 /** A script for Irodori: printable text with its emojis and line breaks kept. */
@@ -2480,10 +1871,13 @@ async function runFaceSwapJob(job: MediaJob): Promise<void> {
 
 /** Motion comic runner (key images, Wan 2.2 cuts, film) and its sound effects; outside the repo. */
 const MOTION_SCRIPT = "D:\\media-tools\\motion-comic\\motion_comic.py";
+
 const MOTION_FELLATIO_SFX = "D:\\media-tools\\motion-comic\\sfx\\tsumugi\\008_フェラ.wav";
+
 /** Spoken calmly in the described voice; the film's lines then copy this voice. */
 const MOTION_VOICE_SAMPLE =
   "…こんばんは。今日は、ゆっくりしていってね。あなたのこと、ずっと待ってたんだから。";
+
 /** A cut of 3 s took ~11 min at 832x480; the fast profile (640x368, Real-ESRGAN) takes ~6 min, see clips.py. */
 const MOTION_TIMEOUT_MS = 4 * 60 * 60_000;
 
@@ -3469,6 +2863,7 @@ async function continueMotionJob(job: MediaJob): Promise<void> {
 
 /** Typesets panels into a page with vertical bubbles (PIL, in the Wan2GP venv). */
 const MANGA_COMPOSE = "D:\\media-tools\\image\\manga_compose.py";
+
 const MANGA_FONT = "C:\\Windows\\Fonts\\BIZ-UDGothicB.ttc";
 
 /**
@@ -4596,6 +3991,7 @@ const ANIME_SOURCE_IDENTITY_PROMPT =
   " Change the rendering only; keep the individual design of reference 1: hair color and hairstyle silhouette, eye color, outfit, accessories, visible marks. Do not invent a different character. When the result must be a photograph, give the face natural human proportions while keeping the character recognizable.";
 
 const RANDOM_BODIES = ["slender", "average", "athletic", "soft and curvy", "petite"];
+
 const RANDOM_OUTFITS = [
   "a white blouse and a navy pleated skirt",
   "a casual hoodie and jeans",
@@ -4608,6 +4004,7 @@ const RANDOM_OUTFITS = [
   "a sporty tracksuit",
   "a floral one-piece dress",
 ];
+
 const RANDOM_SHOES = [
   "white sneakers",
   "loafers",
@@ -5380,15 +4777,21 @@ export async function makeCharacterIcon(sheet: string, icon: string): Promise<vo
 }
 
 const SD_SCRIPTS_DIR = "D:\\media-tools\\sd-scripts";
+
 const SD_SCRIPTS_PYTHON = path.join(SD_SCRIPTS_DIR, "venv", "Scripts", "python.exe");
+
 /**
  * Qwen Image 2.1 (7B, already installed) with the Viggle Turbo LoRA: 6 steps instead of ~30, so a
  * reference picture becomes a new view in about 25 s. The LoRA files sit in Wan2GP's loras folder.
  */
 const QWEN_EDIT_MODEL = "qwen_image_21_7B";
+
 const QWEN_LORA_DIR = "D:\\media-tools\\Wan2GP\\loras\\qwen21";
+
 const VIGGLE_TURBO_LORA = "Qwen-Image-2.1-viggle-turbo-v0.3-6step-lora-r256.safetensors";
+
 const OUTPAINT_LORA = "qwen-image-2.1-outpaint-v2.safetensors";
+
 /** The Wan2GP settings that turn Qwen Image 2.1 into the 6-step editor (plus extra LoRAs, if any). */
 function qwenTurboSettings(extraLoras: string[] = []): Record<string, unknown> {
   return {
@@ -5401,7 +4804,9 @@ function qwenTurboSettings(extraLoras: string[] = []): Record<string, unknown> {
     negative_prompt: "",
   };
 }
+
 const LORA_REPEATS = 8;
+
 const LORA_EPOCHS = 6;
 
 /**
@@ -5899,14 +5304,19 @@ async function smoothVideo(job: MediaJob): Promise<void> {
 
 // Wan2GP engines run headless through its Python API (openclaw_job.py); nothing is served on the network.
 const WAN2GP_DIR = "D:\\media-tools\\Wan2GP";
+
 const WAN2GP_PYTHON = path.join(WAN2GP_DIR, "venv", "Scripts", "python.exe");
+
 const WAN2GP_RUNNER = path.join(WAN2GP_DIR, "openclaw_job.py");
+
 const QWEN_TURBO_RUNNER = path.resolve("scripts/media/external/qwen_image_turbo_job.py");
+
 const WAN2GP_SIZES: Record<NonNullable<MediaOptions["aspect"]>, string> = {
   square: "624x624",
   portrait: "480x832",
   landscape: "832x480",
 };
+
 const WAN2GP_ENGINES: Record<
   Exclude<VideoEngine, SdcppVideoEngine>,
   {
@@ -6216,7 +5626,9 @@ async function runQualityPass(job: MediaJob): Promise<void> {
 // ---------- Queue ----------
 
 const jobs = new Map<string, MediaJob>();
+
 const queue: string[] = [];
+
 let working = false;
 
 function metaPath(id: string): string {
@@ -6339,6 +5751,7 @@ async function processQueue(): Promise<void> {
 }
 
 type FinishedListener = (job: MediaJob) => void | Promise<void>;
+
 const finishedListeners = new Set<FinishedListener>();
 
 /** Calls `listener` with every job that ends, done or failed (not with deleted ones). */
@@ -6688,9 +6101,13 @@ const BASE_IMAGE_SEC: Record<ImageModel, number> = {
   pencil: 30,
   cyberpony: 30,
 };
+
 const FAST_IMAGE_SEC = 15;
+
 const REALESRGAN_EXE = "D:\\media-tools\\upscale\\realesrgan-ncnn-vulkan.exe";
+
 const COMFY_PYTHON_PATH = "D:\\media-tools\\ComfyUI\\venv\\Scripts\\python.exe";
+
 /** Video seconds of work per second of clip, and the clip length when none is chosen. */
 const VIDEO_SEC_PER_CLIP_SEC: Record<VideoEngine, number> = {
   standard: 150,
@@ -6700,6 +6117,7 @@ const VIDEO_SEC_PER_CLIP_SEC: Record<VideoEngine, number> = {
   fast: 40,
   h3: 110,
 };
+
 const DEFAULT_CLIP_SEC: Record<VideoEngine, number> = {
   standard: 2,
   remix: 2,
@@ -6708,7 +6126,9 @@ const DEFAULT_CLIP_SEC: Record<VideoEngine, number> = {
   fast: 3,
   h3: 5,
 };
+
 const SMOOTH_SEC = 60;
+
 /** Stopping the chat model and loading the generator when nothing is running yet. */
 const COLD_START_SEC = 60;
 
