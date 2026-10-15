@@ -2,8 +2,12 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { voiceConsentRequired } from "./blocked-terms-config.js";
+import { waitForChatTurnEnd } from "./main-llm-idle.js";
+import { hasDedicatedMediaGpu, mediaProcessEnv } from "./media-gpu.js";
 import { readJsonFile, resolveOpenClawHome, writeJsonFile } from "./partner-store.js";
 import { ensureTtsEngine, VOICE_PROJECT_ID as VOICE_ID } from "./partner-tts.js";
+import { normalizeVoiceCaption } from "./voice-caption.js";
 
 /**
  * Voice studio: users upload recordings of their own (or consenting) voice; training runs in a
@@ -14,7 +18,10 @@ export type VoiceStatus = "uploading" | "queued" | "training" | "ready" | "faile
 export type VoiceProject = {
   id: string;
   name: string;
-  consent: true;
+  /** 同意の確認を済ませたか（確認を不要にした場合は false のこともある）。 */
+  consent: boolean;
+  /** 許可の確認の記録：声の出どころの種類と、許可の根拠（本人の申告。アプリの確認画面で、入力される）。 */
+  consentNote?: string;
   status: VoiceStatus;
   createdAt: number;
   updatedAt: number;
@@ -29,6 +36,10 @@ export type VoiceProject = {
   source?: "recording" | "design";
   /** The description a designed voice was made from. */
   caption?: string;
+  /** Queued with "今から学習": trains at the next tick instead of waiting for the night window. */
+  trainNow?: boolean;
+  /** Video or mixed audio is not training input until one separated speaker is selected. */
+  extractionMode?: "pending" | "selected";
 };
 
 export type VoiceStudioSettings = { windowStartHour: number; windowEndHour: number };
@@ -46,7 +57,7 @@ export function projectDir(id: string): string {
   return path.join(studioRoot(), id);
 }
 
-async function saveProject(project: VoiceProject): Promise<void> {
+export async function saveProject(project: VoiceProject): Promise<void> {
   project.updatedAt = Date.now();
   await writeJsonFile(path.join(projectDir(project.id), "meta.json"), project);
 }
@@ -78,9 +89,15 @@ export async function listVoiceProjects(): Promise<VoiceProject[]> {
   return projects.sort((a, b) => b.createdAt - a.createdAt);
 }
 
-export async function createVoiceProject(name: string, consent: unknown): Promise<VoiceProject> {
+export async function createVoiceProject(
+  name: string,
+  consent: unknown,
+  extraction = false,
+  consentNote?: string,
+): Promise<VoiceProject> {
   // Only the speaker (or someone with their permission) may turn a voice into a model.
-  if (consent !== true)
+  // Whether this is asked is set in dist/blocked-terms.json (voiceRules.requireConsent; asked when absent).
+  if (consent !== true && voiceConsentRequired())
     throw new Error(
       "Consent is required: the recordings must be your own voice or used with the speaker's permission",
     );
@@ -90,11 +107,13 @@ export async function createVoiceProject(name: string, consent: unknown): Promis
   const project: VoiceProject = {
     id: `voice-${randomUUID().slice(0, 18)}`,
     name: trimmed,
-    consent: true,
+    consent: consent === true,
+    ...(consentNote?.trim() ? { consentNote: consentNote.trim().slice(0, 1200) } : {}),
     status: "uploading",
     createdAt: now,
     updatedAt: now,
     files: [],
+    ...(extraction ? { extractionMode: "pending" as const } : {}),
   };
   await fs.mkdir(path.join(projectDir(project.id), "raw"), { recursive: true });
   await saveProject(project);
@@ -114,7 +133,7 @@ export async function appendVoiceUpload(params: {
     throw new Error("This voice no longer accepts uploads");
   const safeName = path
     .basename(params.fileName)
-    .replace(/[^\w.\-ぁ-んァ-ン一-龥]/g, "_")
+    .replace(/[^\w.\-\u3041-\u3096\u30A1-\u30FA\u4E00-\u9FFF]/g, "_")
     .slice(0, 80);
   if (!ALLOWED_EXT.test(safeName)) throw new Error("Unsupported audio format");
   const target = path.join(projectDir(project.id), "raw", safeName);
@@ -140,12 +159,19 @@ export async function appendVoiceUpload(params: {
   return project;
 }
 
-export async function queueVoiceTraining(id: string): Promise<VoiceProject> {
+export async function queueVoiceTraining(
+  id: string,
+  options: { now?: boolean } = {},
+): Promise<VoiceProject> {
   const project = await loadVoiceProject(id);
+  if (project.extractionMode === "pending")
+    throw new Error("先に話者を解析して、学習する声を選んでください");
   if (project.files.length === 0) throw new Error("Upload at least one recording first");
+  if (project.status === "training") throw new Error("この声はいま学習中です");
   project.status = "queued";
   project.error = undefined;
-  project.step = "夜間の学習待ち";
+  project.trainNow = options.now === true ? true : undefined;
+  project.step = options.now === true ? "まもなく学習を始めます" : "夜間の学習待ち";
   await saveProject(project);
   return project;
 }
@@ -199,12 +225,13 @@ export async function createDesignedVoice(
   caption: string,
   sampleWav: string,
 ): Promise<VoiceProject> {
+  const description = normalizeVoiceCaption(caption);
   const project = await createVoiceProject(name, true);
   const target = path.join(projectDir(project.id), "raw", "design.wav");
   await fs.copyFile(sampleWav, target);
   project.files = [{ name: "design.wav", bytes: (await fs.stat(target)).size }];
   project.source = "design";
-  project.caption = caption.slice(0, 200);
+  project.caption = description;
   await saveProject(project);
   return project;
 }
@@ -253,11 +280,21 @@ function sbv2Dir(): string {
   return path.join(resolveOpenClawHome(), "tts", "sbv2");
 }
 
+async function exists(p: string): Promise<boolean> {
+  try {
+    await fs.access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function pauseFlagPath(): string {
   return path.join(resolveOpenClawHome(), "bonsai", "llm-pause.flag");
 }
 
 async function stopMainLlm(): Promise<void> {
+  if (hasDedicatedMediaGpu()) return;
   await fs.writeFile(pauseFlagPath(), String(Date.now()));
   await new Promise<void>((resolve) => {
     // Main server and CPU workers both hold memory; training needs the GPU and RAM headroom.
@@ -276,21 +313,37 @@ async function stopMainLlm(): Promise<void> {
 }
 
 async function resumeMainLlm(): Promise<void> {
+  if (hasDedicatedMediaGpu()) return;
   // The watchdog restarts the last model within a minute once the flag is gone.
   await fs.rm(pauseFlagPath(), { force: true });
 }
 
-function runTrainingScript(project: VoiceProject, onStep: (step: string) => void): Promise<void> {
+function runTrainingScript(
+  project: VoiceProject,
+  onStep: (step: string) => void,
+  resume: boolean,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const python = path.join(sbv2Dir(), "venv", "Scripts", "python.exe");
     const script = path.join(resolveOpenClawHome(), "tts", "train_voice.py");
+    // A retry (the dataset already exists) continues from where the last run stopped instead of
+    // starting the hours-long pipeline over; train_voice.py rebuilds anyway if recordings changed.
     const child = spawn(
       python,
-      [script, "--project", projectDir(project.id), "--name", project.id],
+      [
+        script,
+        "--project",
+        projectDir(project.id),
+        "--name",
+        project.id,
+        ...(resume ? ["--resume"] : []),
+      ],
       {
         cwd: sbv2Dir(),
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
+        // A piped Python on Windows writes cp932; the STEP lines are Japanese.
+        env: mediaProcessEnv({ PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" }),
       },
     );
     let tail = "";
@@ -341,7 +394,8 @@ async function installIntoAivis(project: VoiceProject): Promise<number | undefin
 }
 
 /**
- * Trains the oldest queued voice when inside the window. Returns the project it worked on.
+ * Trains a voice queued with "今から学習" right away, else the oldest queued voice when inside the
+ * night window. Returns the project it worked on.
  * `onDone` reports success or failure (phone/chat notices).
  */
 export async function runVoiceTrainingTick(
@@ -350,22 +404,35 @@ export async function runVoiceTrainingTick(
 ): Promise<VoiceProject | undefined> {
   if (running) return undefined;
   const settings = await loadVoiceStudioSettings();
-  if (!isInTrainingWindow(now.getHours(), settings)) return undefined;
-  const next = (await listVoiceProjects())
+  const queued = (await listVoiceProjects())
     .filter((p) => p.status === "queued")
-    .sort((a, b) => a.updatedAt - b.updatedAt)[0];
+    .sort((a, b) => a.updatedAt - b.updatedAt);
+  // "今から学習" skips the night window; the others wait for it.
+  const next =
+    queued.find((p) => p.trainNow) ??
+    (isInTrainingWindow(now.getHours(), settings) ? queued[0] : undefined);
   if (!next) return undefined;
   running = true;
   const project = next;
+  // A dataset from an earlier attempt means this is a retry: continue from where it stopped.
+  const resume = await exists(path.join(sbv2Dir(), "Data", project.id));
   try {
     project.status = "training";
+    // A chat reply in progress (e.g. the assistant that started this training) finishes first.
+    project.step = resume ? "前回の続きから再開します" : "チャットの返事が終わるのを待っています";
+    await saveProject(project);
+    await waitForChatTurnEnd();
     project.step = "メインLLMを一時停止";
     await saveProject(project);
     await stopMainLlm();
-    await runTrainingScript(project, (step) => {
-      project.step = step;
-      void saveProject(project);
-    });
+    await runTrainingScript(
+      project,
+      (step) => {
+        project.step = step;
+        void saveProject(project);
+      },
+      resume,
+    );
     project.step = "AivisSpeechに追加";
     await saveProject(project);
     project.speakerId = await installIntoAivis(project);
@@ -375,6 +442,7 @@ export async function runVoiceTrainingTick(
     project.status = "failed";
     project.error = String(err).slice(0, 500);
   } finally {
+    project.trainNow = undefined;
     await resumeMainLlm();
     await saveProject(project);
     running = false;

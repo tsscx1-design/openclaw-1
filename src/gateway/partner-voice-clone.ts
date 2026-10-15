@@ -3,8 +3,14 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { irodoriInstalled, synthesizeIrodori } from "./irodori-tts.js";
 import { resolveOpenClawHome } from "./partner-store.js";
-import { prepareSpeechText, type PartnerVoice, type TtsSpeakerStyle } from "./partner-tts.js";
+import {
+  prepareSpeechText,
+  synthesizeSpeech,
+  type PartnerVoice,
+  type TtsSpeakerStyle,
+} from "./partner-tts.js";
 import { listVoiceProjects, loadVoiceProject, projectDir } from "./voice-studio.js";
 
 // Voice cloning for partners: Qwen3-TTS 0.6B Base (GGUF) through upstream llama.cpp's llama-tts.
@@ -63,7 +69,7 @@ function run(exe: string, args: string[], timeoutMs: number): Promise<void> {
 export async function listCloneVoices(): Promise<TtsSpeakerStyle[]> {
   if (!(await exists(llamaTts())) || !(await exists(TTS_MODEL))) return [];
   return (await listVoiceProjects())
-    .filter((project) => project.files.length > 0)
+    .filter((project) => project.files.length > 0 && project.extractionMode !== "pending")
     .map((project) => ({
       engine: "clone",
       speakerId: 0,
@@ -73,9 +79,50 @@ export async function listCloneVoices(): Promise<TtsSpeakerStyle[]> {
     }));
 }
 
+/** Studio voices read by Irodori-TTS, which performs emojis (moans, breaths, whispers). */
+export async function listIrodoriVoices(): Promise<TtsSpeakerStyle[]> {
+  if (!(await irodoriInstalled())) return [];
+  return (await listVoiceProjects())
+    .filter((project) => project.files.length > 0 && project.extractionMode !== "pending")
+    .map((project) => ({
+      engine: "irodori",
+      speakerId: 0,
+      voiceId: project.id,
+      speakerName: `${project.name}（Irodori）`,
+      styleName: "喘ぎ・吐息・囁きの絵文字OK",
+    }));
+}
+
+/** Speaks with any partner voice: an engine voice, a clone (Qwen3-TTS) or Irodori-TTS. */
+export async function speakWithVoice(voice: PartnerVoice, text: string): Promise<Buffer> {
+  if (voice.engine === "clone") return synthesizeCloneSpeech(voice, text);
+  if (
+    voice.engine === "gptsovits" ||
+    voice.engine === "outetts" ||
+    voice.engine === "fishlocal" ||
+    voice.engine === "voxcpm2"
+  ) {
+    // loaded when needed: studio-engines.ts imports this module (the reference clip)
+    const { speakWithStudioEngine } = await import("./studio-engines.js");
+    return speakWithStudioEngine(voice, text);
+  }
+  if (voice.engine === "irodori") {
+    if (!voice.voiceId) throw new Error("この声には録音がありません");
+    // Partner replies are read next to the chat model, so the small model is used here.
+    const { audio } = await synthesizeIrodori({
+      text,
+      model: "small",
+      referenceWav: await referenceClip(voice.voiceId),
+    });
+    return audio;
+  }
+  return synthesizeSpeech(voice, text);
+}
+
 /** A short mono 24 kHz clip cut from the voice's first recording, rebuilt when uploads change. */
-async function referenceClip(voiceId: string): Promise<string> {
+export async function referenceClip(voiceId: string): Promise<string> {
   const project = await loadVoiceProject(voiceId);
+  if (project.extractionMode === "pending") throw new Error("先に使う話者を選んでください");
   const source = project.files[0];
   if (!source) throw new Error("この声には録音がありません");
   const dir = projectDir(voiceId);

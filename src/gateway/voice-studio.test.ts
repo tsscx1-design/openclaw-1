@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installBlockedTerms } from "./blocked-terms-test-support.js";
 import {
   appendVoiceUpload,
   createVoiceProject,
@@ -12,19 +13,33 @@ import {
 } from "./voice-studio.js";
 
 let home = "";
+let restoreBlockedTerms: () => void = () => undefined;
 
 beforeEach(async () => {
   home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voice-studio-"));
   vi.stubEnv("OPENCLAW_HOME", home);
+  // The consent rule comes from dist/blocked-terms.json; the tests use their own empty file.
+  restoreBlockedTerms = installBlockedTerms({});
 });
 
 afterEach(async () => {
+  restoreBlockedTerms();
   vi.unstubAllEnvs();
   await fs.rm(home, { recursive: true, force: true });
 });
 
 describe("voice studio", () => {
   it("requires explicit consent", async () => {
+    await expect(createVoiceProject("ルナの声", false)).rejects.toThrow(/Consent/);
+  });
+
+  it("does not ask for consent when dist/blocked-terms.json says requireConsent is false", async () => {
+    restoreBlockedTerms();
+    restoreBlockedTerms = installBlockedTerms({ voiceRules: { requireConsent: false } });
+    const voice = await createVoiceProject("ルナの声", false);
+    expect(voice.consent).toBe(false);
+    restoreBlockedTerms();
+    restoreBlockedTerms = installBlockedTerms({ voiceRules: { requireConsent: true } });
     await expect(createVoiceProject("ルナの声", false)).rejects.toThrow(/Consent/);
   });
 

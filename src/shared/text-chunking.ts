@@ -3,7 +3,8 @@ import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/ut
 
 export { avoidTrailingHighSurrogateBreak };
 
-const CJK_PUNCTUATION_BREAK_AFTER_RE = /[、。，．！？；：）］｝〉》」』】〕〗〙]/u;
+const CJK_PUNCTUATION_BREAK_AFTER_RE =
+  /[\u3001\u3002\uff0c\uff0e\uff01\uff1f\uff1b\uff1a\uff09\uff3d\uff5d\u3009\u300b\u300d\u300f\u3011\u3015\u3017\u3019]/u;
 
 export function normalizeChunkLimit(limit: number): number {
   // String slicing truncates fractional indexes, so positive limits need an integer progress step.

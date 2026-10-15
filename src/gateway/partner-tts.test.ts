@@ -23,6 +23,31 @@ describe("partner TTS", () => {
     expect(sanitizePartnerVoice({ engine: "aivis", speakerId: 1.5 })).toBeUndefined();
   });
 
+  it("treats GPT-SoVITS, OuteTTS and Fish S2 voices like clone voices: a studio recording is required", () => {
+    for (const engine of ["gptsovits", "outetts", "fishlocal"]) {
+      expect(
+        sanitizePartnerVoice({ engine, speakerId: 0, voiceId: "voice-0123456789abcdef" }),
+      ).toEqual({
+        engine,
+        speakerId: 0,
+        voiceId: "voice-0123456789abcdef",
+      });
+      expect(sanitizePartnerVoice({ engine, speakerId: 0 })).toBeUndefined();
+      expect(
+        sanitizePartnerVoice({ engine, speakerId: 0, voiceId: "../etc/passwd" }),
+      ).toBeUndefined();
+    }
+  });
+
+  it("does not synthesize a studio voice through the HTTP engines", async () => {
+    await expect(
+      synthesizeSpeech(
+        { engine: "gptsovits", speakerId: 0, voiceId: "voice-0123456789abcdef" },
+        "こんにちは",
+      ),
+    ).rejects.toThrow(/Studio voices/);
+  });
+
   it("keeps a clone voice only when it points at a voice-studio recording", () => {
     expect(
       sanitizePartnerVoice({ engine: "clone", speakerId: 0, voiceId: "voice-0123456789abcdef" }),

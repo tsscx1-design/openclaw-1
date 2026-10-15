@@ -5,8 +5,26 @@ import { resolveOpenClawHome } from "./partner-store.js";
 
 /** Local VOICEVOX-compatible engines (AivisSpeech speaks the same HTTP API). */
 export type HttpTtsEngineId = "voicevox" | "aivis";
-/** "clone" speaks with a voice-studio recording through Qwen3-TTS (partner-voice-clone.ts). */
-export type TtsEngineId = HttpTtsEngineId | "clone";
+/**
+ * "clone" speaks with a voice-studio recording through Qwen3-TTS; "irodori" speaks with it
+ * through Irodori-TTS, which also performs emojis in the text (🥵 moans, 😮‍💨 breaths, 👂 whispers).
+ * Both are synthesized in partner-voice-clone.ts.
+ */
+export const STUDIO_ENGINES = [
+  "clone",
+  "irodori",
+  "gptsovits",
+  "outetts",
+  "fishlocal",
+  "voxcpm2",
+] as const;
+/** Engines that imitate a voice-studio recording (GPT-SoVITS, OuteTTS, Fish S2 and VoxCPM2 are synthesized in studio-engines.ts). */
+export type StudioEngineId = (typeof STUDIO_ENGINES)[number];
+export type TtsEngineId = HttpTtsEngineId | StudioEngineId;
+
+export function isStudioEngine(engine: unknown): engine is StudioEngineId {
+  return (STUDIO_ENGINES as readonly unknown[]).includes(engine);
+}
 
 export const VOICE_PROJECT_ID = /^voice-[a-z0-9-]{8,60}$/;
 
@@ -148,8 +166,8 @@ export function prepareSpeechText(text: string): string {
 export async function synthesizeSpeech(voice: PartnerVoice, text: string): Promise<Buffer> {
   const speech = prepareSpeechText(text);
   if (!speech) throw new Error("Nothing to read aloud");
-  if (voice.engine === "clone")
-    throw new Error("Clone voices are synthesized by partner-voice-clone");
+  if (isStudioEngine(voice.engine))
+    throw new Error("Studio voices are synthesized by partner-voice-clone");
   await ensureTtsEngine(voice.engine);
   const base = engineUrl(voice.engine);
   const queryRes = await fetch(
@@ -175,7 +193,7 @@ export function sanitizePartnerVoice(raw: unknown): PartnerVoice | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const v = raw as Record<string, unknown>;
   if (
-    (v.engine !== "voicevox" && v.engine !== "aivis" && v.engine !== "clone") ||
+    (v.engine !== "voicevox" && v.engine !== "aivis" && !isStudioEngine(v.engine)) ||
     typeof v.speakerId !== "number" ||
     !Number.isInteger(v.speakerId)
   ) {
@@ -184,7 +202,8 @@ export function sanitizePartnerVoice(raw: unknown): PartnerVoice | undefined {
   // A clone voice must point at a voice-studio project (recorded with the speaker's consent).
   const voiceId =
     typeof v.voiceId === "string" && VOICE_PROJECT_ID.test(v.voiceId) ? v.voiceId : undefined;
-  if (v.engine === "clone" && !voiceId) return undefined;
+  const studio = isStudioEngine(v.engine);
+  if (studio && !voiceId) return undefined;
   const clamp = (value: unknown, min: number, max: number) =>
     typeof value === "number" && Number.isFinite(value)
       ? Math.min(max, Math.max(min, value))
@@ -192,7 +211,7 @@ export function sanitizePartnerVoice(raw: unknown): PartnerVoice | undefined {
   const voice: PartnerVoice = {
     engine: v.engine,
     speakerId: v.speakerId,
-    voiceId: v.engine === "clone" ? voiceId : undefined,
+    voiceId: studio ? voiceId : undefined,
     label: typeof v.label === "string" ? v.label.slice(0, 80) : undefined,
     speed: clamp(v.speed, 0.5, 2),
     pitch: clamp(v.pitch, -0.15, 0.15),
