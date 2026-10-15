@@ -14,12 +14,7 @@ import {
   miniFramePrompt,
 } from "./avatar-frames.js";
 import { importGeneratedModel } from "./avatar-models.js";
-import {
-  assertAgeAllowed,
-  assertNoBlockedTerms,
-  isSexualText,
-  negativeTags,
-} from "./blocked-terms-config.js";
+import { assertAgeAllowed, negativeTags } from "./blocked-terms-config.js";
 import { runTagger } from "./character-creator.js";
 import { characterMotionPrompt, readCharacterMotionProfile } from "./character-motion-profile.js";
 import {
@@ -78,7 +73,6 @@ import {
   type StagePosition,
 } from "./comic-series.js";
 import {
-  estimateSwap,
   FACEFUSION_DIR,
   FACEFUSION_PYTHON,
   faceFusionPath,
@@ -89,12 +83,7 @@ import {
 } from "./face-swap.js";
 import { type GenStyle, readGenStyle } from "./gen-style.js";
 import { enterGroupChatMode } from "./group-chat-model.js";
-import {
-  IRODORI_DIR,
-  irodoriInstalled,
-  stopIrodoriWorker,
-  synthesizeIrodori,
-} from "./irodori-tts.js";
+import { irodoriInstalled, stopIrodoriWorker, synthesizeIrodori } from "./irodori-tts.js";
 import { waitForChatTurnEnd } from "./main-llm-idle.js";
 import { loadBook, previouslyText, removeBook, saveBook } from "./manga-book-store.js";
 import { type PageLayout, planPage, slotAspect } from "./manga-layout.js";
@@ -108,7 +97,6 @@ import {
   MANGA_MAX_PAGES,
   MANGA_MIN_PAGES,
   MANGA_PANEL_ASPECTS,
-  MANGA_PANEL_COUNT,
   mangaScriptSystemPrompt,
   mergeBookCast,
   parseBookOutline,
@@ -132,7 +120,6 @@ import {
   JOB_TIMEOUT_MS,
   KEEP_FAILED,
   MAX_QUEUE,
-  MAX_TEXT,
   MEDIA_MODEL_DIR,
   MUSIC_DIT,
   MUSIC_LM,
@@ -151,6 +138,7 @@ import {
   VIDEO_VAE,
   videoNegative,
 } from "./media/config.js";
+import { COMFY_PYTHON_PATH, defaultJobSec, REALESRGAN_EXE } from "./media/estimates.js";
 import {
   aceBin,
   exists,
@@ -161,6 +149,20 @@ import {
   resultPath,
   sdCli,
 } from "./media/paths.js";
+import { mediaStudioStatus } from "./media/status.js";
+import {
+  askGemma,
+  askMainLlm,
+  assertAllowedRequest,
+  imagePromptFor,
+  isSexualRequest,
+  productionRequest,
+  sanitizeMediaText,
+  toAudioVideoPrompt,
+  toH3Prompt,
+  toMotionPrompt,
+  toMusicCaption,
+} from "./media/text.js";
 import type {
   ImageModel,
   MediaJob,
@@ -211,11 +213,7 @@ import {
   saveSampleIndex,
 } from "./sample-factory.js";
 import { upscaleWithSeedVr } from "./seedvr-comfy.js";
-import {
-  SPECIALIST_WORKERS,
-  startSpecialistWorker,
-  waitForWorkerReady,
-} from "./specialist-router.js";
+import { SPECIALIST_WORKERS } from "./specialist-router.js";
 import { listVoiceProjects } from "./voice-studio.js";
 export {
   type ImageModel,
@@ -227,6 +225,21 @@ export {
   type WanImageModel,
 } from "./media/types.js";
 export { isWanImageModel, sdxlSampling } from "./media/config.js";
+export { mediaStudioStatus } from "./media/status.js";
+export {
+  assertAllowedRequest,
+  isSexualRequest,
+  sanitizeH3Prompt,
+  sanitizeMediaText,
+} from "./media/text.js";
+export {
+  buildIpAdapterOptions,
+  estimateFaceSwapJob,
+  estimateMediaJob,
+  type FaceSwapEstimate,
+  type MediaEstimate,
+  selectBgmPrompt,
+} from "./media/estimates.js";
 
 // Local image / video / music generation on the RTX 4060 (8 GB).
 // The main chat LLM holds almost all VRAM, so a job stops it (the watchdog pause flag keeps it
@@ -235,340 +248,6 @@ export { isWanImageModel, sdxlSampling } from "./media/config.js";
 //   video: stable-diffusion.cpp vid_gen + Wan 2.2 14B Rapid AIO NSFW (image-to-video, 4 steps);
 //          text-to-video renders a still with the image model first, then animates it
 //   music: acestep.cpp (ace-lm + ace-synth) + ACE-Step 1.5 turbo; lyrics are written by its LM
-
-export async function mediaStudioStatus(): Promise<{
-  image: { ready: boolean; missing: string[] };
-  video: { ready: boolean; missing: string[] };
-  wan2gp: { ready: boolean; missing: string[] };
-  music: { ready: boolean; missing: string[] };
-  manga: { ready: boolean; missing: string[] };
-  comic: { ready: boolean; missing: string[] };
-  voice: { ready: boolean; missing: string[] };
-  motion: { ready: boolean; missing: string[] };
-  faceswap: { ready: boolean; missing: string[] };
-  busy: boolean;
-  queued: number;
-  /** The job being worked on now (what the phone shows as "the chat AI is paused for ..."). */
-  current?: { kind: MediaKind; stage?: string; request: string; elapsedSec: number };
-  /** True while the chat model is stopped to give the GPU to a job. */
-  chatPaused: boolean;
-}> {
-  const check = async (files: string[]) => {
-    const missing: string[] = [];
-    for (const file of files) if (!(await exists(file))) missing.push(path.basename(file));
-    return { ready: missing.length === 0, missing };
-  };
-  return {
-    image: await check([sdCli(), IMAGE_MODEL]),
-    video: await check([sdCli(), IMAGE_MODEL, VIDEO_MODEL, VIDEO_VAE, VIDEO_T5, VIDEO_CLIP_VISION]),
-    // Wan2GP engines download their models on first use, so only the runner is checked here.
-    wan2gp: await check([WAN2GP_PYTHON, WAN2GP_RUNNER]),
-    music: await check([
-      aceBin("ace-lm"),
-      aceBin("ace-synth"),
-      path.join(MUSIC_MODEL_DIR, MUSIC_LM),
-      path.join(MUSIC_MODEL_DIR, MUSIC_DIT),
-      path.join(MUSIC_MODEL_DIR, "Qwen3-Embedding-0.6B-Q8_0.gguf"),
-      path.join(MUSIC_MODEL_DIR, "vae-BF16.gguf"),
-    ]),
-    manga: await check([sdCli(), IMAGE_MODEL, WAN2GP_PYTHON, MANGA_COMPOSE, MANGA_FONT]),
-    comic: await check([IMAGE_SERVER, IMAGE_MODEL, WAN2GP_PYTHON, MANGA_COMPOSE, MANGA_FONT]),
-    voice: (await irodoriInstalled())
-      ? { ready: true, missing: [] }
-      : { ready: false, missing: ["Irodori-TTS"] },
-    // Key images, Wan 2.2 Remix cuts (sd.cpp), RIFE and the Irodori voices.
-    motion: await check([
-      MOTION_SCRIPT,
-      sdCli(),
-      IMAGE_MODEL,
-      REMIX_HIGH,
-      REMIX_LOW,
-      WAN2GP_PYTHON,
-      RIFE_SCRIPT,
-      path.join(IRODORI_DIR, ".venv"),
-    ]),
-    faceswap: await check([FACEFUSION_PYTHON, path.join(FACEFUSION_DIR, "facefusion.py")]),
-    busy: working,
-    queued: queue.length,
-    ...(currentJob
-      ? {
-          current: {
-            kind: currentJob.kind,
-            stage: currentJob.stage,
-            request: currentJob.request,
-            elapsedSec: Math.round((Date.now() - (currentJob.startedAt ?? Date.now())) / 1000),
-          },
-        }
-      : {}),
-    chatPaused: await clearStalePauseFlag(),
-  };
-}
-
-// ---------- Safety ----------
-
-/**
- * 性的な依頼かどうか。成人向けの絵にするか、成人向けのネガティブタグを足すかを決めるための判定で、
- * 禁止の判定ではない。語句は dist/blocked-terms.json の sexualTerms にあり、コードには持たない。
- */
-export function isSexualRequest(text: string): boolean {
-  return isSexualText(text);
-}
-
-/**
- * dist/blocked-terms.json の禁止語句が含まれる依頼は作らない。ファイルが無い・読めないときも作らない。
- * 固定の禁止語は持たず、禁止の中身はすべてそのファイルで決まる。
- */
-export function assertAllowedRequest(...texts: string[]): void {
-  assertNoBlockedTerms(...texts);
-}
-
-/** Printable text only, so a prompt can never turn into extra command-line flags. */
-export function sanitizeMediaText(raw: string, max = MAX_TEXT): string {
-  return raw
-    .replace(/[\r\n\t]+/g, " ")
-    .replace(
-      /[^\p{L}\p{N}\s,.:;!?()'"_+\-/&\u3001\u3002\u30FB\u30FC\u301C\uFF5E\uFF01\uFF1F\u300C\u300D]/gu,
-      "",
-    )
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, max);
-}
-
-// ---------- Prompt translation (main LLM on the GPU, else the gemma worker on CPU) ----------
-
-const MAIN_LLM = "http://127.0.0.1:11434";
-
-/**
- * The chat model on the GPU writes a prompt in ~1-2 s where the CPU gemma worker took 5-10 s.
- * It is skipped (undefined) while the GPU is lent out (pause flag), while it is busy answering a
- * chat (one slot), or when it fails, so a media job never waits on the conversation.
- */
-async function askMainLlm(
-  system: string,
-  user: string,
-  maxTokens: number,
-  timeoutMs = 30_000,
-  schema?: Record<string, unknown>,
-): Promise<string | undefined> {
-  if (await exists(pauseFlag())) return undefined;
-  try {
-    const slots = await fetch(`${MAIN_LLM}/slots`, { signal: AbortSignal.timeout(2_000) });
-    if (slots.ok) {
-      const list = (await slots.json()) as Array<{ is_processing?: boolean }>;
-      if (list.some((slot) => slot.is_processing)) return undefined;
-    }
-    const response = await fetch(`${MAIN_LLM}/v1/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        max_tokens: maxTokens,
-        temperature: 0.3,
-        chat_template_kwargs: { enable_thinking: false },
-        // A schema makes llama.cpp generate only text that fits it (see comic-series.ts).
-        ...(schema
-          ? { response_format: { type: "json_schema", json_schema: { name: "script", schema } } }
-          : {}),
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!response.ok) return undefined;
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    return data.choices?.[0]?.message?.content?.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function askPromptWriter(system: string, user: string, maxTokens: number): Promise<string> {
-  return (await askMainLlm(system, user, maxTokens)) ?? (await askGemma(system, user, maxTokens));
-}
-
-async function askGemma(system: string, user: string, maxTokens: number): Promise<string> {
-  const worker = SPECIALIST_WORKERS.find((entry) => entry.key === "gemma");
-  if (!worker) throw new Error("gemma worker is not configured");
-  // Probe /health first: the PowerShell port lookup in startSpecialistWorker is slow when the
-  // gateway runs as a scheduled task, and the worker is normally already up.
-  const up = await fetch(`http://127.0.0.1:${worker.port}/health`, {
-    signal: AbortSignal.timeout(3_000),
-  })
-    .then((res) => res.ok)
-    .catch(() => false);
-  if (!up) {
-    const started = await startSpecialistWorker("gemma");
-    if (!started.success) throw new Error(started.message);
-    if (!(await waitForWorkerReady(worker.port)))
-      throw new Error("gemma worker did not become ready");
-  }
-  const response = await fetch(`http://127.0.0.1:${worker.port}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      max_tokens: maxTokens,
-      temperature: 0.3,
-      chat_template_kwargs: { enable_thinking: false },
-    }),
-    signal: AbortSignal.timeout(5 * 60_000),
-  });
-  if (!response.ok) throw new Error(`gemma worker HTTP ${response.status}`);
-  const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-  return data.choices?.[0]?.message?.content?.trim() ?? "";
-}
-
-const ASCII_ONLY = (text: string) => text.replace(/[^\x20-\x7E]/g, " ");
-
-async function toImageTags(request: string): Promise<string> {
-  const tags = await askPromptWriter(
-    "You write prompts for an anime Stable Diffusion XL model (Illustrious). Convert the user's request into 10-30 comma-separated English danbooru-style tags: subject count and gender, appearance, clothing, pose, expression, background, lighting, composition. Keep every detail the user asked for. Output only the tags.",
-    request,
-    200,
-  );
-  return sanitizeMediaText(ASCII_ONLY(tags), 700);
-}
-
-/** Photo-real SDXL checkpoints follow short descriptive phrases better than anime tags. */
-async function toPhotoPrompt(request: string): Promise<string> {
-  const text = await askPromptWriter(
-    "You write prompts for a photorealistic Stable Diffusion XL model. Convert the user's request into one line of 15-35 comma-separated short English phrases: subject, age, ethnicity, hair, face and expression, body, clothing, pose, setting, lighting, camera shot and lens. People are adults; write an explicit adult age such as 'in her mid 20s'. Unless the user names another ethnicity or nationality, every person is Japanese: write 'Japanese woman' or 'Japanese man' and add 'East Asian facial features'. Keep every detail the user asked for. Output only the prompt.",
-    request,
-    220,
-  );
-  return sanitizeMediaText(ASCII_ONLY(text), 800);
-}
-
-/** Z-Image understands sentences better than booru tags. */
-async function toNaturalImagePrompt(request: string): Promise<string> {
-  const text = await askPromptWriter(
-    "You write prompts for a text-to-image model. Rewrite the user's request as two to four vivid English sentences describing subject, appearance, clothing, pose, expression, setting, lighting, art style (anime illustration unless the user asks otherwise) and composition. Keep every detail the user asked for. Output only the prompt.",
-    request,
-    220,
-  );
-  return sanitizeMediaText(ASCII_ONLY(text), 900);
-}
-
-async function productionRequest(job: MediaJob): Promise<string> {
-  if (job.productionPrompt) return job.productionPrompt;
-  const notes: string[] = [];
-  const lock = job.options.characterLock;
-  if (lock) {
-    const characters = (await Promise.all(lock.characterIds.map((id) => getCharacter(id)))).filter(
-      (entry): entry is LibraryCharacter => Boolean(entry),
-    );
-    if (characters.length > 0) {
-      const details = characters.map((entry) => {
-        const outfit = lock.outfit
-          ? entry.outfits?.find((candidate) => candidate.name === lock.outfit)?.tags
-          : undefined;
-        const look = characterLook(entry);
-        return `${entry.name}: ${outfit ? lookWithOutfit(look, outfit) : look}`;
-      });
-      const kept = [
-        lock.keepFace ? "顔" : "",
-        lock.keepBody ? "体格" : "",
-        lock.keepHair ? "髪" : "",
-        lock.keepOutfit ? "衣装" : "",
-      ].filter(Boolean);
-      notes.push(
-        `【キャラクター固定】${details.join(" / ")}。${kept.join("・")}を全カットで同一に保つ。`,
-      );
-    }
-  }
-  const scene = job.options.sceneState;
-  if (scene) {
-    const inherited = scene.inheritJobId ? await getMediaJob(scene.inheritJobId) : undefined;
-    const sourceScene = inherited?.options.sceneState;
-    const values = {
-      place: scene.place ?? sourceScene?.place,
-      camera: scene.camera ?? sourceScene?.camera,
-      pose: scene.pose ?? sourceScene?.pose,
-      wardrobe: scene.wardrobe ?? sourceScene?.wardrobe,
-      continuity: scene.continuity ?? sourceScene?.continuity,
-    };
-    const sceneLines = [
-      values.place ? `場所: ${values.place}` : "",
-      values.camera ? `カメラ: ${values.camera}` : "",
-      values.pose ? `姿勢: ${values.pose}` : "",
-      values.wardrobe ? `衣服の状態: ${values.wardrobe}` : "",
-      values.continuity ? `引き継ぐ状態: ${values.continuity}` : "",
-    ].filter(Boolean);
-    if (sceneLines.length > 0)
-      notes.push(`【シーン状態】${sceneLines.join("。")}。前の場面との連続性を保つ。`);
-  }
-  job.productionPrompt = [job.request, ...notes].filter(Boolean).join("\n");
-  return job.productionPrompt;
-}
-
-/** Prompt text for the chosen image model: booru tags for anime SDXL, phrases for photo SDXL, sentences for Z-Image. */
-async function imagePromptFor(job: MediaJob): Promise<string> {
-  const request = await productionRequest(job);
-  if (isWanImageModel(job.options.imageModel)) return toNaturalImagePrompt(request);
-  return sdxlSpecOf(sdxlModelOf(job)).photo ? toPhotoPrompt(request) : toImageTags(request);
-}
-
-async function toMotionPrompt(request: string): Promise<string> {
-  const text = await askPromptWriter(
-    "You write prompts for an image-to-video model. Describe in one or two short English sentences the motion and camera movement the user wants (what moves, how, camera). Output only the description.",
-    request || "subtle natural motion, gentle camera movement",
-    120,
-  );
-  return sanitizeMediaText(ASCII_ONLY(text), 500);
-}
-
-/** LTX-2 renders sound too, so its prompt also describes what is heard. */
-async function toAudioVideoPrompt(request: string): Promise<string> {
-  const text = await askPromptWriter(
-    "You write prompts for a video model that also generates the soundtrack. In two or three short English sentences describe the motion, the camera, and what is heard (voices, ambient sound, music, effects). Keep any spoken line in the user's language inside quotes. Output only the description.",
-    request || "subtle natural motion, gentle camera movement, soft ambient sound",
-    200,
-  );
-  return sanitizeMediaText(text.replace(/[\r\n]+/g, " "), 700);
-}
-
-const H3_PREFIX = "integrated_multimodal_description:";
-
-/** MiniMax H3 reads a two-part script: the shot (with optional dialogue) and the soundscape. */
-async function toH3Prompt(request: string, seconds: number): Promise<string> {
-  const text = await askPromptWriter(
-    `You write prompts for MiniMax H3, which animates a first frame into a ${seconds}-second realistic clip with synchronized sound. Write exactly two lines in English:\n${H3_PREFIX} [Shot 1] A ${seconds}-second realistic single take. <who is in the frame, what they do, their expression, how the camera moves>\noverall_soundscape: <the sounds heard>\nPeople are adults. If someone should speak, put the words in Japanese inside the first line as (S1) <d>[Japanese] spoken words</d>. Keep every detail the user asked for. Output only the two lines.`,
-    request || "natural subtle motion with a gentle camera push in and soft ambient sound",
-    260,
-  );
-  return sanitizeH3Prompt(text);
-}
-
-/**
- * H3's script needs line breaks, brackets and <d> tags, which sanitizeMediaText removes. It only
- * travels inside the Wan2GP request JSON, never on a command line.
- */
-export function sanitizeH3Prompt(raw: string): string {
-  const text = raw
-    .replace(/\r\n?/g, "\n")
-    .replace(/[^\p{L}\p{N} \n,.:;!?()'"_+\-/&[\]<>、。・ー〜～！？「」]/gu, "")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n{2,}/g, "\n")
-    .trim()
-    .slice(0, 1_500);
-  return text.startsWith(H3_PREFIX) ? text : `${H3_PREFIX} [Shot 1] ${text}`;
-}
-
-async function toMusicCaption(request: string): Promise<string> {
-  const text = await askPromptWriter(
-    "You write captions for a text-to-music model. Rewrite the user's request as one English sentence listing genre, mood, tempo feel, instruments and vocal type (for example: 'Upbeat J-pop with bright synths, punchy drums and a cheerful female vocal'). Output only the caption.",
-    request,
-    120,
-  );
-  return sanitizeMediaText(ASCII_ONLY(text), 400);
-}
 
 // ---------- GPU lease ----------
 
@@ -673,7 +352,7 @@ async function stopCpuWorkers(): Promise<void> {
  * while a job ran, so nobody releases it) is removed once nothing is running or waiting and the
  * flag is old, so the chat AI is not paused for ever.
  */
-async function clearStalePauseFlag(): Promise<boolean> {
+export async function clearStalePauseFlag(): Promise<boolean> {
   const flag = pauseFlag();
   if (!(await exists(flag))) return false;
   const age =
@@ -804,7 +483,7 @@ function markStage(job: MediaJob, stage: string): void {
 }
 
 /** The job being worked on and the tool process it runs; a delete stops them. */
-let currentJob: MediaJob | undefined;
+export let currentJob: MediaJob | undefined;
 
 const activeChildren = new Set<ReturnType<typeof spawn>>();
 
@@ -946,7 +625,7 @@ function stepNote(prefix: string, job: MediaJob) {
 // between images also skips ~15 s of start-up. It holds the CUDA context, so it is stopped before
 // the GPU goes back to the chat model.
 
-const IMAGE_SERVER = "D:\\media-tools\\image\\sdxl_server.py";
+export const IMAGE_SERVER = "D:\\media-tools\\image\\sdxl_server.py";
 
 /** After the queue drains, wait this long for another job before handing the GPU back. */
 const IMAGE_GRACE_MS = 45_000;
@@ -1766,7 +1445,7 @@ async function runVoiceJob(job: MediaJob): Promise<void> {
 }
 
 /** The target file of a face swap job: "in:<file>" or a finished library job ("job:<id>"). */
-function resolveSwapTarget(options: MediaOptions): string | undefined {
+export function resolveSwapTarget(options: MediaOptions): string | undefined {
   const target = options.swapTarget ?? "";
   if (target.startsWith("in:")) return resolveInputFile(target);
   const match = /^job:([a-f0-9]{6,32})$/.exec(target);
@@ -1870,7 +1549,7 @@ async function runFaceSwapJob(job: MediaJob): Promise<void> {
 }
 
 /** Motion comic runner (key images, Wan 2.2 cuts, film) and its sound effects; outside the repo. */
-const MOTION_SCRIPT = "D:\\media-tools\\motion-comic\\motion_comic.py";
+export const MOTION_SCRIPT = "D:\\media-tools\\motion-comic\\motion_comic.py";
 
 const MOTION_FELLATIO_SFX = "D:\\media-tools\\motion-comic\\sfx\\tsumugi\\008_フェラ.wav";
 
@@ -2862,9 +2541,9 @@ async function continueMotionJob(job: MediaJob): Promise<void> {
 }
 
 /** Typesets panels into a page with vertical bubbles (PIL, in the Wan2GP venv). */
-const MANGA_COMPOSE = "D:\\media-tools\\image\\manga_compose.py";
+export const MANGA_COMPOSE = "D:\\media-tools\\image\\manga_compose.py";
 
-const MANGA_FONT = "C:\\Windows\\Fonts\\BIZ-UDGothicB.ttc";
+export const MANGA_FONT = "C:\\Windows\\Fonts\\BIZ-UDGothicB.ttc";
 
 /**
  * Text for the chat model that writes scripts. The script is written before the GPU is taken;
@@ -5305,9 +4984,9 @@ async function smoothVideo(job: MediaJob): Promise<void> {
 // Wan2GP engines run headless through its Python API (openclaw_job.py); nothing is served on the network.
 const WAN2GP_DIR = "D:\\media-tools\\Wan2GP";
 
-const WAN2GP_PYTHON = path.join(WAN2GP_DIR, "venv", "Scripts", "python.exe");
+export const WAN2GP_PYTHON = path.join(WAN2GP_DIR, "venv", "Scripts", "python.exe");
 
-const WAN2GP_RUNNER = path.join(WAN2GP_DIR, "openclaw_job.py");
+export const WAN2GP_RUNNER = path.join(WAN2GP_DIR, "openclaw_job.py");
 
 const QWEN_TURBO_RUNNER = path.resolve("scripts/media/external/qwen_image_turbo_job.py");
 
@@ -5625,11 +5304,11 @@ async function runQualityPass(job: MediaJob): Promise<void> {
 
 // ---------- Queue ----------
 
-const jobs = new Map<string, MediaJob>();
+export const jobs = new Map<string, MediaJob>();
 
-const queue: string[] = [];
+export const queue: string[] = [];
 
-let working = false;
+export let working = false;
 
 function metaPath(id: string): string {
   return path.join(outDir(), `${id}.json`);
@@ -6063,336 +5742,4 @@ export async function deleteMediaJob(id: string): Promise<boolean> {
     }
   }
   return true;
-}
-
-// ---------- Time estimates ----------
-
-/**
- * Typical seconds for one job once the GPU is ready (RTX 4060, 2026-10-03 measurements and the
- * engine notes shown in the app). Real results of the same settings replace them.
- */
-const BASE_IMAGE_SEC: Record<ImageModel, number> = {
-  wai: 30,
-  asianreal: 30,
-  lustify: 30,
-  cyberreal: 30,
-  noobai: 60,
-  zimage: 90,
-  anima: 75,
-  klein: 60,
-  qwenimg: 80,
-  qwenimgturbo: 45,
-  hassaku: 30,
-  illustrious: 30,
-  novaanime: 30,
-  plantmilk: 30,
-  juggernaut: 30,
-  realvis: 30,
-  realismil: 30,
-  illust2: 30,
-  animagine: 30,
-  rouwei: 30,
-  chenkin: 30,
-  janku: 30,
-  ntrmix: 30,
-  desire: 30,
-  cyberanime: 30,
-  cybersemi: 30,
-  pencil: 30,
-  cyberpony: 30,
-};
-
-const FAST_IMAGE_SEC = 15;
-
-const REALESRGAN_EXE = "D:\\media-tools\\upscale\\realesrgan-ncnn-vulkan.exe";
-
-const COMFY_PYTHON_PATH = "D:\\media-tools\\ComfyUI\\venv\\Scripts\\python.exe";
-
-/** Video seconds of work per second of clip, and the clip length when none is chosen. */
-const VIDEO_SEC_PER_CLIP_SEC: Record<VideoEngine, number> = {
-  standard: 150,
-  remix: 210,
-  long: 150,
-  audio: 90,
-  fast: 40,
-  h3: 110,
-};
-
-const DEFAULT_CLIP_SEC: Record<VideoEngine, number> = {
-  standard: 2,
-  remix: 2,
-  long: 5,
-  audio: 4,
-  fast: 3,
-  h3: 5,
-};
-
-const SMOOTH_SEC = 60;
-
-/** Stopping the chat model and loading the generator when nothing is running yet. */
-const COLD_START_SEC = 60;
-
-/** Jobs with the same settings take about the same time; this key groups them. */
-function estimateKey(kind: MediaKind, options: MediaOptions): string {
-  const quality = options.qualityMode ?? "off";
-  const gpu = resolveGpuMode(options.gpuMode);
-  if (kind === "image")
-    return `${gpu}|image|${options.imageModel ?? "wai"}|${options.fast ? "fast" : ""}|${options.repair ? "repair" : ""}|${quality}`;
-  if (kind === "music")
-    return `${gpu}|music|${options.durationSec ?? 90}|${options.instrumental ? 1 : 0}`;
-  if (kind === "voice") return `${gpu}|voice|${options.irodoriModel ?? "large"}`;
-  if (kind === "faceswap")
-    return `${gpu}|faceswap|${options.swapQuality ?? "standard"}|${options.swapEnhancer ? 1 : 0}`;
-  if (kind === "motion") {
-    if (options.motionRevoiceJobId)
-      return `${gpu}|motion-revoice|${options.voiceId ?? "description"}`;
-    if (options.motionJoinJobIds?.length)
-      return `${gpu}|motion-join|${options.motionJoinJobIds.length}|${options.motionBridgeSeconds ?? 3}`;
-    return `${gpu}|motion|${options.motionMinutes ?? 1}|${options.motionFellatio ? 1 : 0}|${options.motionPreview === false ? "" : "p"}`;
-  }
-  if (kind === "comic") {
-    return `${gpu}|comic|${options.comicTask ?? "episode"}|${options.imageModel ?? "wai"}|${options.fast ? "fast" : ""}${options.sampleKeys?.length ? `|batch${options.sampleKeys.length}` : ""}`;
-  }
-  if (kind === "manga") {
-    return `${gpu}|manga|${options.mangaLayout ?? "4koma"}|${options.mangaPages ?? ""}|${options.imageModel ?? "wai"}|${options.fast ? "fast" : ""}`;
-  }
-  const engine = options.engine ?? "standard";
-  const clip = options.durationSec ?? DEFAULT_CLIP_SEC[engine];
-  const source = options.sourceImageJobId || options.sourceImageBase64 ? "src" : "";
-  return `${gpu}|video|${engine}|${clip}|${options.smooth ? "smooth" : ""}|${source}`;
-}
-
-function baseJobSec(kind: MediaKind, options: MediaOptions): number {
-  // Anima starts ComfyUI for every picture: 45 s measured with the distilled model, 75 s without it.
-  const still =
-    options.imageModel === "anima" && options.fast
-      ? 45
-      : options.fast && !isWanImageModel(options.imageModel) && options.imageModel !== "noobai"
-        ? FAST_IMAGE_SEC
-        : (BASE_IMAGE_SEC[options.imageModel ?? "wai"] ?? 30);
-  if (kind === "image" && options.repair) return 240;
-  if (kind === "image" && options.upscaleSourceJobId)
-    return options.upscaleModel === "7b" ? 150 : 70;
-  if (kind === "image") return still;
-  if (kind === "music") return 30 + (options.durationSec ?? 90);
-  // Script by the chat model, every panel drawn, then the page put together.
-  if (kind === "manga" && options.mangaLayout === "book") {
-    const pages = Math.max(
-      MANGA_MIN_PAGES,
-      Math.min(MANGA_MAX_PAGES, options.mangaPages ?? MANGA_DEFAULT_PAGES),
-    );
-    // Outline, then about 40 s of script per page, then about 5 panels a page (and a cover) drawn
-    // on one or two GPUs, and the typesetting.
-    const lanes = generationCudaDevices(options.gpuMode === "fast").length >= 2 ? 2 : 1;
-    const pictures = pages * MANGA_PANEL_COUNT.book + (options.mangaCover === false ? 0 : 1);
-    return 90 + pages * 40 + Math.ceil((pictures * still) / lanes) + 20;
-  }
-  if (kind === "manga") return 60 + still * MANGA_PANEL_COUNT[options.mangaLayout ?? "4koma"] + 10;
-  // Model load, then a few seconds per line.
-  if (kind === "voice" && options.voiceDrama) {
-    const lines = options.voiceDrama.minutes * 7;
-    return (
-      120 +
-      Math.ceil(lines / 24) * 90 +
-      lines * (options.irodoriModel === "large" ? 14 : options.irodoriModel === "small" ? 5 : 1.5)
-    );
-  }
-  if (kind === "voice")
-    return options.irodoriModel === "fast" ? 15 : options.irodoriModel === "small" ? 25 : 70;
-  // The real figure depends on the video; media.estimate computes it from the file.
-  if (kind === "faceswap") return 600;
-  // Script, ~12 voice lines (large), 3-5 pictures, then 6-8 cuts of ~6 min (shared by two GPUs) and the film.
-  if (kind === "motion") {
-    if (options.motionRevoiceJobId) return 120 + 12 * 45 + 120;
-    if (options.motionJoinJobIds?.length)
-      return joinEstimateSec(options.motionJoinJobIds.length, options.motionBridgeSeconds ?? 3);
-    // A cut takes about 350 s (640x368 clip ~326 s + Real-ESRGAN ~25 s); the two GPUs share the cuts.
-    return 120 + 12 * 45 + 5 * 40 + (options.motionFellatio ? 8 : 6) * 350 + 120;
-  }
-  if (kind === "comic") {
-    // Outline and script by the chat model (~3 min), panels (two-person ones take longer), strips.
-    if (options.comicTask === "sheet") return still;
-    if (options.comicTask === "outpaint") return 200;
-    // Qwen Image 2.1 edit of the standing picture (about 2.5 minutes with the start-up).
-    if (options.comicTask === "sample" && options.sampleKeys?.length)
-      return 120 + options.sampleKeys.length * (options.sampleEngine === "precise" ? 200 : 55);
-    if (options.comicTask === "sample")
-      return options.sampleEngine === "precise"
-        ? 360
-        : options.sampleEngine === "edit2509"
-          ? 240
-          : 150;
-    if (options.comicTask === "avatar") return 120 + 22 * allAvatarFrames().length;
-    if (options.comicTask === "mini") return 120 + 25 * MINI_FRAMES.length;
-    if (options.comicTask === "model3d") return 420;
-    if (options.comicTask === "redraw") return still * 1.5 + 20;
-    // Qwen Image Edit makes ~23 pictures (~25 s each after loading), then ~1,100 training steps.
-    if (options.comicTask === "lora")
-      return 120 + 25 * DATASET_VIEWS.length + 2.2 * (DATASET_VIEWS.length + 1) * 8 * 6;
-    return 180 + still * 1.3 * COMIC_PANELS_PER_EPISODE + 30;
-  }
-  const engine = options.engine ?? "standard";
-  const clip = options.durationSec ?? DEFAULT_CLIP_SEC[engine];
-  const drawsStill = !(options.sourceImageJobId || options.sourceImageBase64);
-  return (
-    VIDEO_SEC_PER_CLIP_SEC[engine] * clip +
-    (options.smooth ? SMOOTH_SEC : 0) +
-    (drawsStill ? still : 0)
-  );
-}
-
-function defaultJobSec(kind: MediaKind, options: MediaOptions): number {
-  const base = baseJobSec(kind, options);
-  const mode = options.qualityMode;
-  if (!mode || mode === "off") return base;
-  const finish =
-    kind === "image"
-      ? mode === "max"
-        ? 150
-        : 70
-      : kind === "manga" || kind === "comic"
-        ? mode === "max"
-          ? 420
-          : 210
-        : kind === "voice" || kind === "music"
-          ? 30
-          : mode === "max"
-            ? 300
-            : 150;
-  return base + finish;
-}
-
-function median(values: number[]): number {
-  const sorted = values.toSorted((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)] ?? 0;
-}
-
-export type MediaEstimate = {
-  /** This job alone. */
-  jobSec: number;
-  /** Jobs ahead of it: the rest of the running one plus the queued ones. */
-  waitSec: number;
-  totalSec: number;
-  /** How many finished jobs with the same settings the estimate is based on (0 = typical values). */
-  samples: number;
-};
-
-/** Roughly how long a new job would take, including the queue in front of it. */
-export async function estimateMediaJob(
-  kind: MediaKind,
-  options: MediaOptions,
-): Promise<MediaEstimate> {
-  const history = (await listMediaJobs(10_000)).filter(
-    (job) => job.status === "done" && (job.durationSec ?? 0) > 0,
-  );
-  const estimateOf = (jobKind: MediaKind, jobOptions: MediaOptions) => {
-    const key = estimateKey(jobKind, jobOptions);
-    const same = history
-      .filter((job) => estimateKey(job.kind, job.options) === key)
-      .slice(0, 5)
-      .map((job) => job.durationSec ?? 0);
-    return same.length > 0
-      ? { sec: median(same), samples: same.length }
-      : { sec: defaultJobSec(jobKind, jobOptions), samples: 0 };
-  };
-  const own = estimateOf(kind, options);
-  let waitSec = 0;
-  for (const job of jobs.values()) {
-    if (job.status === "running") {
-      const elapsed = Math.round((Date.now() - (job.startedAt ?? Date.now())) / 1000);
-      waitSec += Math.max(30, estimateOf(job.kind, job.options).sec - elapsed);
-    } else if (job.status === "queued") {
-      waitSec += estimateOf(job.kind, job.options).sec;
-    }
-  }
-  // Real results already include the start-up; typical values need it when nothing is running.
-  const coldStart = !working && own.samples === 0 ? COLD_START_SEC : 0;
-  const jobSec = own.sec + coldStart;
-  return { jobSec, waitSec, totalSec: jobSec + waitSec, samples: own.samples };
-}
-
-export type FaceSwapEstimate = MediaEstimate & {
-  frames: number;
-  passes: number;
-  /** Seconds per frame per person that the estimate uses. */
-  secPerFrame: number;
-  /** True when the speed comes from real earlier jobs. */
-  measured: boolean;
-  videoSec: number;
-};
-
-/** How long a face swap of this file would take: its frames × the speed, plus the queue in front. */
-export async function estimateFaceSwapJob(options: MediaOptions): Promise<FaceSwapEstimate> {
-  const target = resolveSwapTarget(options);
-  if (!target || !(await exists(target))) throw new Error("入れ替える動画か画像が見つかりません");
-  const probe = await probeMedia(target);
-  const key = estimateKey("faceswap", options);
-  const speeds = (await listMediaJobs(10_000))
-    .filter(
-      (job) =>
-        job.kind === "faceswap" &&
-        job.status === "done" &&
-        (job.timings?.spf ?? 0) > 0 &&
-        estimateKey(job.kind, job.options) === key,
-    )
-    .slice(0, 5)
-    .map((job) => (job.timings?.spf ?? 0) / 1000);
-  const own = estimateSwap(probe, options, speeds.length > 0 ? median(speeds) : undefined);
-  const queued = await estimateMediaJob("faceswap", options);
-  const coldStart = !working ? COLD_START_SEC : 0;
-  const jobSec = own.jobSec + coldStart;
-  return {
-    jobSec,
-    waitSec: queued.waitSec,
-    totalSec: jobSec + queued.waitSec,
-    samples: speeds.length,
-    frames: own.frames,
-    passes: own.passes,
-    secPerFrame: own.secPerFrame,
-    measured: own.measured,
-    videoSec: Math.round(probe.durationSec),
-  };
-}
-
-// ─── BGM自動選択ヘルパー ────────────────────────────────────────────────────
-
-/**
- * モーションコミックのシチュエーションに合ったBGMジャンルを返す。
- * 実際のBGM生成は ACE-Step / Suno API を呼ぶ予定。現時点はプロンプト文字列のみ返す。
- */
-export function selectBgmPrompt(templateId: string): string {
-  const BGM_MAP: Record<string, string> = {
-    missionary: "slow romantic piano, soft strings, intimate bedroom ambiance",
-    cowgirl: "upbeat sensual jazz, medium tempo, piano and bass",
-    doggystyle: "driving rhythm, dark electronic beat, tension building",
-    bath: "ambient spa music, water sounds, gentle synth pads",
-    rape_scene: "dark ambient, tense strings, heavy atmosphere",
-    orgy_scene: "club music, heavy bass, electronic dance beat",
-    outdoor_sex: "nature ambiance, birds, light breeze, acoustic guitar",
-    sugar_daddy_scene: "smooth jazz, upscale lounge, piano",
-    default: "soft ambient music, subtle strings, intimate mood",
-  };
-  return BGM_MAP[templateId] ?? BGM_MAP.default ?? "";
-}
-
-// ─── IP-Adapter 顔合わせヘルパー ─────────────────────────────────────────────
-
-/**
- * useIpAdapter フラグが立っているキャラクターの場合、
- * 設定画（sheetJobId）を参照画像としてプロンプトに付加する。
- * 実際のIP-Adapter呼び出しは img2img パスで行い、strength を低めに設定する。
- */
-export function buildIpAdapterOptions(
-  heroine: { useIpAdapter?: boolean; sheetJobId?: string } | undefined,
-): {
-  ipAdapterEnabled: boolean;
-  referenceJobId?: string;
-} {
-  if (!heroine?.useIpAdapter || !heroine?.sheetJobId) {
-    return { ipAdapterEnabled: false };
-  }
-  return {
-    ipAdapterEnabled: true,
-    referenceJobId: heroine.sheetJobId,
-  };
 }
