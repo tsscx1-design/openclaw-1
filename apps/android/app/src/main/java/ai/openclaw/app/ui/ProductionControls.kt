@@ -45,6 +45,8 @@ internal class ProductionControlsState {
   var keepHair by mutableStateOf(true)
   var keepOutfit by mutableStateOf(false)
   var sceneOn by mutableStateOf(false)
+  /** 選んだキャラと結んだパートナーの、会話の今の場面（場所・服装・姿勢・状況）を使う。 */
+  var useChatScene by mutableStateOf(false)
   var place by mutableStateOf("")
   var camera by mutableStateOf("")
   var pose by mutableStateOf("")
@@ -95,6 +97,7 @@ internal class ProductionControlsState {
           .put("keepOutfit", keepOutfit),
       )
     }
+    if (useChatScene && characterIds.isNotEmpty()) params.put("useChatScene", true)
     if (sceneOn || branchParentJobId.isNotBlank()) {
       params.put(
         "sceneState",
@@ -275,6 +278,21 @@ internal fun ProductionControlsPanel(
         }
       }
 
+      if (kind in setOf("image", "video", "manga", "motion") && state.characterIds.isNotEmpty()) {
+        ProductionChip(
+          if (state.useChatScene) "📍 会話の今の場面を使う：使用中" else "📍 会話の今の場面を使う",
+          state.useChatScene,
+          { state.useChatScene = !state.useChatScene },
+          Modifier.fillMaxWidth(),
+        )
+        if (state.useChatScene) {
+          Text(
+            "選んだキャラと結んだパートナーとの会話の、場所・服装・姿勢・状況を入れます。下の欄で書いた項目は、そちらが優先です。",
+            style = ClawTheme.type.captionSmall,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
+      }
       ProductionChip(
         if (state.sceneOn) "シーン状態を引き継ぐ：使用中" else "場所・姿勢・衣服を固定する",
         state.sceneOn,

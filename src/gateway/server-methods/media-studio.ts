@@ -253,8 +253,9 @@ import {
 import { motionCatalog } from "../motion-catalog.js";
 import { MOTION_MINUTES, MOTION_OPTION_IDS, MOTION_TEMPLATE_IDS } from "../motion-comic.js";
 import { motionExtrasFromParams, voiceDramaFromParams } from "../motion-extras.js";
+import { loadAffect, sceneForMedia } from "../partner-affect.js";
 import { researchIoFromTools } from "../partner-research-io.js";
-import { readJsonFile, resolveOpenClawHome } from "../partner-store.js";
+import { isValidPartnerId, readJsonFile, resolveOpenClawHome } from "../partner-store.js";
 import {
   analyzePhoto,
   isolatePhotoSubject,
@@ -748,6 +749,15 @@ async function characterView(entry: LibraryCharacter) {
   };
 }
 
+/** The partner tied to the first of these library characters that has one. */
+async function linkedPartnerOf(characterIds: string[]): Promise<string | undefined> {
+  for (const id of characterIds) {
+    const partnerId = (await getCharacter(id))?.partnerId;
+    if (partnerId) return partnerId;
+  }
+  return undefined;
+}
+
 function guarded(
   handler: (params: Params, respond: RespondFn) => Promise<void>,
 ): GatewayRequestHandlers[string] {
@@ -777,7 +787,21 @@ export const mediaStudioHandlers: GatewayRequestHandlers = {
       fail(respond, "画像が大きすぎます（6MB まで）");
       return;
     }
-    const options = parseMediaOptions(params);
+    const parsed = parseMediaOptions(params);
+    // "Use her scene": the place, clothes and pose of a partner's conversation, under what the app set itself.
+    // useChatScene: the partner tied to the first picked library character that has one.
+    const scenePartnerId =
+      str(params, "scenePartnerId") ??
+      (params.useChatScene === true
+        ? await linkedPartnerOf(parsed.characterLock?.characterIds ?? [])
+        : undefined);
+    const partnerScene =
+      scenePartnerId && isValidPartnerId(scenePartnerId)
+        ? sceneForMedia((await loadAffect(scenePartnerId)).scene)
+        : undefined;
+    const options: MediaOptions = partnerScene
+      ? { ...parsed, sceneState: { ...partnerScene, ...parsed.sceneState } }
+      : parsed;
     try {
       // Items chosen in the app (library options, motion options, poses) are added to the request.
       const extraKeys = (Array.isArray(params.extraItems) ? params.extraItems : []).filter(

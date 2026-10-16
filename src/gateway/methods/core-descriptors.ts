@@ -731,6 +731,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["partner.affect.get", "partners", "operator.read", "2026.10"],
   ["partner.affect.touch", "partners", "operator.write", "2026.10"],
   ["partner.affect.profile.set", "partners", "operator.write", "2026.10"],
+  ["partner.scene.set", "partners", "operator.write", "2026.10"],
   ["partner.bond.get", "partners", "operator.read", "2026.9"],
   ["partner.bond.update", "partners", "operator.write", "2026.9"],
   ["partner.greeting.generate", "partners", "operator.read", "2026.9"],

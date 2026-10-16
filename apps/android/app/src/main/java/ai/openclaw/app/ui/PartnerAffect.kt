@@ -72,7 +72,13 @@ internal data class AffectState(
   val weak: Set<String> = emptySet(),
   val dislike: Set<String> = emptySet(),
   val presets: List<TouchPresetUi> = emptyList(),
+  /** いまの場面（place / outfit / pose / situation）。会話の中で AI が書き換える。 */
+  val scene: Map<String, String> = emptyMap(),
 )
+
+/** 場面の項目（ゲートウェイの SCENE_FIELDS と同じ id）。 */
+internal val SCENE_FIELD_CHOICES =
+  listOf("place" to "場所", "outfit" to "服装", "pose" to "姿勢", "situation" to "状況")
 
 internal data class TouchStepUi(val zone: String, val kind: String, val count: Int)
 internal data class TouchPresetUi(val id: String, val name: String, val steps: List<TouchStepUi>)
@@ -98,7 +104,9 @@ internal fun parseAffect(json: JSONObject): AffectState {
         )
       }
     } ?: emptyList()
-  return AffectState(a.optInt("affection", 30), a.optInt("arousal", 0), MOOD_LABELS[a.optString("mood")] ?: "穏やか", set("favorite"), set("weak"), set("dislike"), presets)
+  val scene =
+    a.optJSONObject("scene")?.let { sc -> SCENE_FIELD_CHOICES.mapNotNull { (id, _) -> sc.optString(id).takeIf { it.isNotBlank() }?.let { id to it } }.toMap() } ?: emptyMap()
+  return AffectState(a.optInt("affection", 30), a.optInt("arousal", 0), MOOD_LABELS[a.optString("mood")] ?: "穏やか", set("favorite"), set("weak"), set("dislike"), presets, scene)
 }
 
 /** 触られた結果と、いまの気持ちを、画面のあちこちで共有する。 */
@@ -128,6 +136,7 @@ internal object AffectBus {
 @Composable
 internal fun AffectBar(viewModel: MainViewModel) {
   var open by remember { mutableStateOf(false) }
+  var sceneOpen by remember { mutableStateOf(false) }
   val s = AffectBus.state
   Row(
     modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(ClawTheme.colors.surfaceRaised.copy(alpha = 0.5f)).clickable { open = true }.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -139,7 +148,72 @@ internal fun AffectBar(viewModel: MainViewModel) {
     Text(text = "気分 ${s.moodLabel}", style = ClawTheme.type.captionSmall, color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
     Text(text = "触り方 ▶", style = ClawTheme.type.captionSmall, color = ClawTheme.colors.primary)
   }
+  Row(
+    modifier = Modifier.fillMaxWidth().padding(top = 4.dp).clip(RoundedCornerShape(10.dp)).background(ClawTheme.colors.surfaceRaised.copy(alpha = 0.35f)).clickable { sceneOpen = true }.padding(horizontal = 10.dp, vertical = 5.dp),
+    verticalAlignment = Alignment.CenterVertically,
+  ) {
+    Text(
+      text = "📍 " + (SCENE_FIELD_CHOICES.mapNotNull { (id, _) -> s.scene[id] }.joinToString("・").ifBlank { "場面はまだ決まっていません" }),
+      style = ClawTheme.type.captionSmall,
+      color = if (s.scene.isEmpty()) ClawTheme.colors.textMuted else ClawTheme.colors.text,
+      maxLines = 2,
+      modifier = Modifier.weight(1f),
+    )
+    Text(text = "場面 ▶", style = ClawTheme.type.captionSmall, color = ClawTheme.colors.primary)
+  }
   if (open) TouchProfileDialog(viewModel) { open = false }
+  if (sceneOpen) SceneDialog(viewModel) { sceneOpen = false }
+}
+
+/** いまの場面を見て、直す・消す。会話の AI が書き換えた内容もここに出る。 */
+@Composable
+internal fun SceneDialog(viewModel: MainViewModel, onClose: () -> Unit) {
+  val scope = rememberCoroutineScope()
+  val values = remember { mutableStateListOf(*Array(SCENE_FIELD_CHOICES.size) { "" }) }
+  var message by remember { mutableStateOf("") }
+  LaunchedEffect(AffectBus.partnerId) {
+    AffectBus.refresh(viewModel)
+    SCENE_FIELD_CHOICES.forEachIndexed { i, (id, _) -> values[i] = AffectBus.state.scene[id].orEmpty() }
+  }
+  fun send(body: JSONObject, done: String) {
+    scope.launch {
+      message =
+        runCatching {
+          AffectBus.state = parseAffect(JSONObject(viewModel.runGatewayRpc(GatewayMethod.PartnerSceneSet, body.put("partnerId", AffectBus.partnerId).toString(), timeoutMs = 15_000)))
+          SCENE_FIELD_CHOICES.forEachIndexed { i, (id, _) -> values[i] = AffectBus.state.scene[id].orEmpty() }
+        }.fold({ done }, { "保存できませんでした：${it.message}" })
+    }
+  }
+  Dialog(onDismissRequest = onClose) {
+    Column(
+      modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(ClawTheme.colors.canvas).padding(14.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Text(text = "📍 いまの場面", style = ClawTheme.type.title, color = ClawTheme.colors.text)
+      Text(
+        text = "会話の流れで AI が自動で書き換えます。自撮りや、生成スタジオで「この場面を使う」を選んだ絵にも入ります。",
+        style = ClawTheme.type.captionSmall,
+        color = ClawTheme.colors.textMuted,
+      )
+      SCENE_FIELD_CHOICES.forEachIndexed { i, (_, label) ->
+        ClawTextField(value = values[i], onValueChange = { values[i] = it }, placeholder = label, label = label, modifier = Modifier.fillMaxWidth())
+      }
+      if (message.isNotBlank()) Text(text = message, style = ClawTheme.type.caption, color = ClawTheme.colors.primary)
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        ClawPrimaryButton(
+          text = "保存",
+          onClick = {
+            val body = JSONObject()
+            SCENE_FIELD_CHOICES.forEachIndexed { i, (id, _) -> body.put(id, values[i].trim()) }
+            send(body, "保存しました")
+          },
+          modifier = Modifier.weight(1f),
+        )
+        ClawSecondaryButton(text = "全部消す", onClick = { send(JSONObject().put("clear", true), "場面を消しました") }, modifier = Modifier.weight(1f))
+      }
+      ClawSecondaryButton(text = "閉じる", onClick = onClose, modifier = Modifier.fillMaxWidth())
+    }
+  }
 }
 
 @Composable

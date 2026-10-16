@@ -21,6 +21,9 @@ import { parseJsonObject } from "../llm-json.js";
 import {
   applyTouch,
   loadAffect,
+  SCENE_FIELDS,
+  type SceneChange,
+  setPartnerScene,
   setTouchProfile,
   TOUCH_KINDS,
   TOUCH_ZONES,
@@ -597,6 +600,21 @@ export const partnerFeatureHandlers: GatewayRequestHandlers = {
     if (Array.isArray(params.dislike)) input.dislike = params.dislike as TouchZone[];
     if (Array.isArray(params.presets)) input.presets = params.presets as TouchPreset[];
     respond(true, { affect: await setTouchProfile(partner.id, input) }, undefined);
+  }),
+  // 今の場面（場所・服装・姿勢・状況）。clear: true で全部消す。"" の項目はその項目だけ消す。
+  "partner.scene.set": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    if (params.clear === true) {
+      respond(true, { affect: await setPartnerScene(partner.id, null) }, undefined);
+      return;
+    }
+    const change: SceneChange = {};
+    for (const field of SCENE_FIELDS) {
+      const value = params[field];
+      if (typeof value === "string") change[field] = value;
+    }
+    respond(true, { affect: await setPartnerScene(partner.id, change) }, undefined);
   }),
 
   // --- 絆レベル ---

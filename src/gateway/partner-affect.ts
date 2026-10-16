@@ -1,12 +1,13 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import type { MediaSceneState } from "./media-production-controls.js";
 import { getPartnerDir } from "./partner-store.js";
 
 // How a partner feels right now: affection (好感度, 0..100, only moves slowly), arousal (高まり,
 // 0..100, rises when she is touched and falls by itself) and a mood. Where she likes or dislikes
-// being touched, and the touch presets the user saved, belong to the same file. Chat reads it
-// (a note in the prompt) and may change it (a state line at the end of a reply); the avatar
-// reports touches to it.
+// being touched, the touch presets the user saved, and the scene the conversation is in (place,
+// clothes, pose, what is going on) belong to the same file. Chat reads it (a note in the prompt)
+// and may change it (a state line at the end of a reply); the avatar reports touches to it.
 
 export const TOUCH_ZONES = [
   "head",
@@ -70,12 +71,38 @@ export type TouchProfile = {
   dislike: TouchZone[];
   presets: TouchPreset[];
 };
+/** Where the conversation is now; pictures made for her copy it (see sceneForMedia). */
+export type PartnerScene = {
+  place?: string;
+  outfit?: string;
+  pose?: string;
+  situation?: string;
+  updatedAt?: number;
+};
+export const SCENE_FIELDS = ["place", "outfit", "pose", "situation"] as const;
+export type SceneField = (typeof SCENE_FIELDS)[number];
+export const SCENE_FIELD_LABELS: Record<SceneField, string> = {
+  place: "場所",
+  outfit: "服装",
+  pose: "姿勢",
+  situation: "状況",
+};
+const SCENE_FIELD_MAX: Record<SceneField, number> = {
+  place: 80,
+  outfit: 120,
+  pose: 100,
+  situation: 200,
+};
+/** A field set to "" clears it. */
+export type SceneChange = Partial<Record<SceneField, string>>;
+
 export type Affect = {
   affection: number;
   arousal: number;
   mood: Mood;
   updatedAt: number;
   profile: TouchProfile;
+  scene: PartnerScene;
 };
 
 const AROUSAL_FALL_PER_MIN = 6;
@@ -83,6 +110,52 @@ const AROUSAL_FALL_PER_MIN = 6;
 const clamp = (n: number, lo = 0, hi = 100): number => Math.min(hi, Math.max(lo, Math.round(n)));
 const zones = (raw: unknown): TouchZone[] =>
   Array.isArray(raw) ? TOUCH_ZONES.filter((z) => raw.includes(z)) : [];
+
+function normalizeScene(raw: unknown): PartnerScene {
+  const input = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const scene: PartnerScene = {};
+  for (const field of SCENE_FIELDS) {
+    const value = input[field];
+    if (typeof value === "string" && value.trim())
+      scene[field] = value.trim().slice(0, SCENE_FIELD_MAX[field]);
+  }
+  if (typeof input.updatedAt === "number" && Object.keys(scene).length > 0)
+    scene.updatedAt = input.updatedAt;
+  return scene;
+}
+
+/** Applies a change to the scene: a text replaces the field, "" clears it. */
+export function mergeScene(
+  scene: PartnerScene,
+  change: SceneChange,
+  now = Date.now(),
+): PartnerScene {
+  const next: PartnerScene = { ...scene };
+  let changed = false;
+  for (const field of SCENE_FIELDS) {
+    const value = change[field];
+    if (typeof value !== "string") continue;
+    changed = true;
+    if (value.trim()) next[field] = value.trim().slice(0, SCENE_FIELD_MAX[field]);
+    else delete next[field];
+  }
+  if (!changed) return scene;
+  const hasAny = SCENE_FIELDS.some((field) => next[field]);
+  if (hasAny) next.updatedAt = now;
+  else delete next.updatedAt;
+  return next;
+}
+
+/** The scene as the media studio's scene state (place, pose, clothes and what carries over). */
+export function sceneForMedia(scene: PartnerScene): MediaSceneState | undefined {
+  const state: MediaSceneState = {
+    ...(scene.place ? { place: scene.place } : {}),
+    ...(scene.pose ? { pose: scene.pose } : {}),
+    ...(scene.outfit ? { wardrobe: scene.outfit } : {}),
+    ...(scene.situation ? { continuity: scene.situation } : {}),
+  };
+  return Object.keys(state).length > 0 ? state : undefined;
+}
 
 function file(partnerId: string): string {
   return path.join(getPartnerDir(partnerId), "affect.json");
@@ -113,6 +186,7 @@ export function normalizeAffect(raw: Partial<Affect> | undefined, now = Date.now
       dislike: zones(profile?.dislike),
       presets,
     },
+    scene: normalizeScene(raw?.scene),
   };
 }
 
@@ -149,6 +223,17 @@ export async function setTouchProfile(
   );
   await saveAffect(partnerId, next);
   return next;
+}
+
+/** Changes the scene from the app; `null` clears all of it. */
+export async function setPartnerScene(
+  partnerId: string,
+  change: SceneChange | null,
+): Promise<Affect> {
+  const affect = await loadAffect(partnerId);
+  affect.scene = change ? mergeScene(affect.scene, change) : {};
+  await saveAffect(partnerId, affect);
+  return affect;
 }
 
 export type TouchResult = {
@@ -213,20 +298,36 @@ export function affectNote(affect: Affect, name: string): string {
         : affect.arousal >= 10
           ? "少しどきどきしている"
           : "落ち着いている";
+  const sceneParts = SCENE_FIELDS.flatMap((field) =>
+    affect.scene[field] ? [`${SCENE_FIELD_LABELS[field]}: ${affect.scene[field]}`] : [],
+  );
+  const sceneText = sceneParts.length
+    ? `【いまの場面】${sceneParts.join("／")}。この場面の続きとして話す（場所・服装・姿勢が急に変わらないように）。`
+    : "【いまの場面】まだ決まっていない。";
   return (
     `【${name}のいまの気持ち】好感度 ${affect.affection}/100（ユーザーを${feeling}）／高まり ${affect.arousal}/100（${heat}）／気分: ${MOOD_LABELS[affect.mood]}。` +
-    `触られて好きな場所: ${label(affect.profile.favorite)}／弱い場所: ${label(affect.profile.weak)}／嫌な場所: ${label(affect.profile.dislike)}。` +
-    "この気持ちが、口調・言葉・仕草にそのまま出るように話す。会話の流れで気持ちが変わったら、返事の最後に次の行を1つ付けてもよい（ユーザーには見えない）: " +
-    '<<state {"affection":2,"arousal":-5,"mood":"照れ"}>>（affection・arousal は増減する数。mood は 穏やか/うれしい/照れ/火照り/拗ね/寂しい/やきもち/眠い/いたずら のどれか。変わらなければ書かない）'
+    `触られて好きな場所: ${label(affect.profile.favorite)}／弱い場所: ${label(affect.profile.weak)}／嫌な場所: ${label(affect.profile.dislike)}。\n` +
+    `${sceneText}\n` +
+    "この気持ちが、口調・言葉・仕草にそのまま出るように話す。会話の流れで気持ちや場面が変わったら、返事の最後に次の行を1つ付けてもよい（ユーザーには見えない）: " +
+    '<<state {"affection":2,"arousal":-5,"mood":"照れ","place":"寝室","outfit":"下着姿","pose":"ベッドに座っている","situation":"見つめ合っている"}>>' +
+    "（affection・arousal は増減する数。mood は 穏やか/うれしい/照れ/火照り/拗ね/寂しい/やきもち/眠い/いたずら のどれか。" +
+    'place=場所、outfit=服装（脱いだ・着替えたなど今の状態）、pose=姿勢、situation=いま何をしているか。変わった項目だけ書く。場面を終えるときは "" にする。何も変わらなければ行ごと書かない）'
   );
 }
 
 const STATE_LINE = /<<\s*state\s*(\{[\s\S]*?\})\s*>>/i;
 
 /** Cuts the state line out of a reply and returns what it asked for. */
+export type StateChange = {
+  affection?: number;
+  arousal?: number;
+  mood?: Mood;
+  scene?: SceneChange;
+};
+
 export function extractStateLine(reply: string): {
   reply: string;
-  change?: { affection?: number; arousal?: number; mood?: Mood };
+  change?: StateChange;
 } {
   const match = STATE_LINE.exec(reply);
   const visible = reply.replace(/<<\s*state[\s\S]*?>>/gi, "").trim();
@@ -238,21 +339,29 @@ export function extractStateLine(reply: string): {
     )?.[0] as Mood | undefined;
     const num = (v: unknown) =>
       typeof v === "number" && Number.isFinite(v) ? Math.max(-15, Math.min(15, v)) : undefined;
-    const change = { affection: num(data.affection), arousal: num(data.arousal), mood };
+    const scene: SceneChange = {};
+    for (const field of SCENE_FIELDS) {
+      const value = data[field];
+      if (typeof value === "string") scene[field] = value;
+    }
+    const change: StateChange = {
+      affection: num(data.affection),
+      arousal: num(data.arousal),
+      mood,
+      ...(Object.keys(scene).length > 0 ? { scene } : {}),
+    };
     return { reply: visible, change };
   } catch {
     return { reply: visible };
   }
 }
 
-export async function applyStateChange(
-  partnerId: string,
-  change: { affection?: number; arousal?: number; mood?: Mood },
-): Promise<Affect> {
+export async function applyStateChange(partnerId: string, change: StateChange): Promise<Affect> {
   const affect = await loadAffect(partnerId);
   if (change.affection) affect.affection = clamp(affect.affection + change.affection);
   if (change.arousal) affect.arousal = clamp(affect.arousal + change.arousal);
   if (change.mood) affect.mood = change.mood;
+  if (change.scene) affect.scene = mergeScene(affect.scene, change.scene);
   affect.updatedAt = Date.now();
   await saveAffect(partnerId, affect);
   return affect;
