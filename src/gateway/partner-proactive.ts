@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { createWebSearchTool } from "../agents/tools/web-tools.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { onMediaJobFinished, type MediaJob } from "./media-studio.js";
+import { getMediaJob, onMediaJobFinished, type MediaJob } from "./media-studio.js";
 import { appendNewsDigest, loadDailySettings, runDailyMessages } from "./partner-daily.js";
+import { maybeSendPartnerSelfie } from "./partner-selfie.js";
 import {
   localDateKey,
   partnerFile,
@@ -17,6 +18,7 @@ import {
   listPartnerProfiles,
   loadPartnerChatHistory,
   savePartnerChatHistory,
+  type PartnerChatMessageItem,
   type PartnerProfile,
 } from "./server-methods/partners.js";
 import { executeSpecialistTask } from "./specialist-router.js";
@@ -346,14 +348,19 @@ async function checkPcHealthAlert(now: Date): Promise<void> {
   );
 }
 
-/** Appends a message to the partner's chat and pushes it to the phone. */
-async function deliverToChat(partner: PartnerProfile, message: string): Promise<void> {
+/** Appends a message (with a picture or film, if any) to the partner's chat and pushes it to the phone. */
+async function deliverToChat(
+  partner: PartnerProfile,
+  message: string,
+  media?: PartnerChatMessageItem["media"],
+): Promise<void> {
   const history = await loadPartnerChatHistory(partner.id);
   history.push({
     id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     role: "assistant",
     content: message,
     timestamp: Date.now(),
+    ...(media ? { media } : {}),
   });
   await savePartnerChatHistory(partner.id, history.slice(-100));
   await notifyPhones(partner.name, message);
@@ -365,16 +372,48 @@ async function deliverToChat(partner: PartnerProfile, message: string): Promise<
  */
 async function announceFinishedJob(job: MediaJob): Promise<void> {
   if (!job.chat) return;
-  const { title, text } = finishedJobNotice(job);
   const partnerId = job.chat.partnerId;
   const partner = partnerId
     ? (await listPartnerProfiles()).find((p) => p.id === partnerId)
     : undefined;
+  if (job.chat.selfie) {
+    if (partner) await deliverSelfie(partner, job, job.chat.selfie.caption);
+    return;
+  }
+  const { title, text } = finishedJobNotice(job);
   if (partner) {
     await deliverToChat(partner, text);
   } else {
     await notifyPhones(title, text);
   }
+}
+
+/**
+ * A selfie she sent by herself: the picture or film with her line. When the film failed but its
+ * still was drawn, the still is sent instead; when nothing came out, the chat stays quiet.
+ */
+async function deliverSelfie(
+  partner: PartnerProfile,
+  job: MediaJob,
+  caption: string,
+): Promise<void> {
+  if (job.status === "done") {
+    await deliverToChat(partner, caption, {
+      jobId: job.id,
+      kind: job.kind === "video" ? "video" : "image",
+    });
+    return;
+  }
+  const still = job.options.sourceImageJobId
+    ? await getMediaJob(job.options.sourceImageJobId)
+    : undefined;
+  if (still?.status === "done") {
+    await deliverToChat(partner, caption, { jobId: still.id, kind: "image" });
+    return;
+  }
+  console.warn(
+    `[partner-selfie] ${partner.name}: the selfie could not be made: ${job.error ?? ""}`,
+  );
 }
 
 /**
@@ -407,6 +446,12 @@ export async function runPartnerProactiveTick(now = new Date()): Promise<void> {
       loadBrief: loadOrBuildDailyBrief,
       deliver: deliverToChat,
     });
+    for (const partner of allPartners.filter((p) => p.settings?.selfie === true)) {
+      const lastChatAt = (await loadPartnerChatHistory(partner.id)).at(-1)?.timestamp;
+      await maybeSendPartnerSelfie(partner, { now, lastChatAt }).catch((err) =>
+        console.error(`[partner-selfie] ${partner.name}:`, err),
+      );
+    }
     const partners = allPartners.filter((p) => p.settings?.proactive === true);
     for (const partner of partners) {
       const statePath = partnerFile(partner.id, "proactive.json");

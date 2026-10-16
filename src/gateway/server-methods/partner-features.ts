@@ -66,6 +66,7 @@ import {
   startVoiceTraining,
 } from "../partner-proactive.js";
 import { researchIoFromTools } from "../partner-research-io.js";
+import { startPartnerSelfie } from "../partner-selfie.js";
 import { clip, generatePartnerSheet, workerSheetCompletion } from "../partner-sheet-generator.js";
 import { buildPartnerSheetMarkdown, parsePartnerSheet } from "../partner-sheet-schema.js";
 import {
@@ -600,6 +601,35 @@ export const partnerFeatureHandlers: GatewayRequestHandlers = {
     if (Array.isArray(params.dislike)) input.dislike = params.dislike as TouchZone[];
     if (Array.isArray(params.presets)) input.presets = params.presets as TouchPreset[];
     respond(true, { affect: await setTouchProfile(partner.id, input) }, undefined);
+  }),
+  // 自撮りを今すぐ1枚（または動画を1本）送ってもらう。時間割は無視する。
+  "partner.selfie.send": guarded(async (params, respond) => {
+    const partner = await requirePartner(params, respond);
+    if (!partner) return;
+    if (partner.realPerson) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "実在の人物がモデルのパートナーは、自撮りの対象外です",
+        ),
+      );
+      return;
+    }
+    const job = await startPartnerSelfie(partner);
+    if (!job) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "どんな写真にするか決められませんでした。もう一度どうぞ",
+        ),
+      );
+      return;
+    }
+    respond(true, { jobId: job.id, kind: job.kind }, undefined);
   }),
   // 今の場面（場所・服装・姿勢・状況）。clear: true で全部消す。"" の項目はその項目だけ消す。
   "partner.scene.set": guarded(async (params, respond) => {

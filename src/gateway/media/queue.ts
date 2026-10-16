@@ -219,7 +219,7 @@ export async function startMediaJob(
   kind: MediaKind,
   request: string,
   options: MediaOptions,
-  origin: { chat?: { partnerId?: string } } = {},
+  origin: { chat?: MediaJob["chat"] } = {},
 ): Promise<MediaJob> {
   // A job that did not choose a GPU mode runs in the default one (both GPUs), wherever it was started from.
   options = { ...options, gpuMode: resolveGpuMode(options.gpuMode) };

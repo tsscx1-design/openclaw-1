@@ -82,6 +82,12 @@ export type PartnerSettings = {
   thinkingDefault?: "instant" | "auto" | "deep";
   /** Allow the partner to start conversations (check-ins, birthdays, morning brief). */
   proactive?: boolean;
+  /** The partner sends selfies by herself (partner-selfie.ts), up to selfiePerDay a day. */
+  selfie?: boolean;
+  /** 1–6, default 2. */
+  selfiePerDay?: number;
+  /** Now and then the selfie is a short film instead of a still. */
+  selfieVideo?: boolean;
   /** Topics the workers research every morning for the greeting. */
   dailyTopics?: string[];
   /**
@@ -128,6 +134,12 @@ export function sanitizePartnerSettings(raw: unknown): PartnerSettings {
     temperature: clampNumber(input.temperature, 0.2, 1.2),
     thinkingDefault: pick(input.thinkingDefault, ["instant", "auto", "deep"] as const),
     proactive: typeof input.proactive === "boolean" ? input.proactive : undefined,
+    selfie: typeof input.selfie === "boolean" ? input.selfie : undefined,
+    selfiePerDay:
+      typeof input.selfiePerDay === "number" && Number.isFinite(input.selfiePerDay)
+        ? Math.round(Math.min(6, Math.max(1, input.selfiePerDay)))
+        : undefined,
+    selfieVideo: typeof input.selfieVideo === "boolean" ? input.selfieVideo : undefined,
     dailyTopics: topics,
     newsDigest: typeof input.newsDigest === "boolean" ? input.newsDigest : undefined,
     studioAssistant: typeof input.studioAssistant === "boolean" ? input.studioAssistant : undefined,
@@ -1789,6 +1801,8 @@ export interface PartnerChatMessageItem {
   role: "user" | "assistant";
   content: string;
   timestamp: number;
+  /** A picture or film from the media studio shown in the bubble (selfies the partner sends). */
+  media?: { jobId: string; kind: "image" | "video" };
 }
 
 export { getPartnerDir, isValidPartnerId };

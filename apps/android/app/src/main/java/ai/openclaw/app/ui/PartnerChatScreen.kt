@@ -108,6 +108,9 @@ data class PartnerSingleChatMessage(
   val role: String, // "user" or "assistant"
   val content: String,
   val timestamp: Long,
+  /** A picture or film from the media studio shown in the bubble (selfies the partner sends). */
+  val mediaJobId: String = "",
+  val mediaKind: String = "",
 )
 
 /**
@@ -370,6 +373,8 @@ internal fun PartnerChatScreen(
               role = item.optString("role", "assistant"),
               content = item.optString("content", ""),
               timestamp = item.optLong("timestamp", 0L),
+              mediaJobId = item.optJSONObject("media")?.optString("jobId").orEmpty(),
+              mediaKind = item.optJSONObject("media")?.optString("kind").orEmpty(),
             )
           )
         }
@@ -437,6 +442,8 @@ internal fun PartnerChatScreen(
               role = item.optString("role", "assistant"),
               content = item.optString("content", ""),
               timestamp = item.optLong("timestamp", 0L),
+              mediaJobId = item.optJSONObject("media")?.optString("jobId").orEmpty(),
+              mediaKind = item.optJSONObject("media")?.optString("kind").orEmpty(),
             )
           )
         }
@@ -914,6 +921,7 @@ internal fun PartnerChatScreen(
                     style = ClawTheme.type.body.copy(fontSize = 14.sp, lineHeight = 20.sp),
                     color = ClawTheme.colors.text,
                   )
+                  if (msg.mediaJobId.isNotBlank()) PartnerChatJobMedia(viewModel, msg.mediaJobId, msg.mediaKind)
                   if (!isUser) {
                     val speakingThis = speakingKey == msg.id
                     Text(

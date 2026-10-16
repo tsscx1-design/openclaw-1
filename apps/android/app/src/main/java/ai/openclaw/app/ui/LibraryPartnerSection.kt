@@ -45,6 +45,9 @@ internal fun LibraryPartnerPanel(
   var emoji by remember(chara.id) { mutableStateOf("some") }
   var thinking by remember(chara.id) { mutableStateOf("auto") }
   var proactive by remember(chara.id) { mutableStateOf(false) }
+  var selfie by remember(chara.id) { mutableStateOf(false) }
+  var selfiePerDay by remember(chara.id) { mutableStateOf(2) }
+  var selfieVideo by remember(chara.id) { mutableStateOf(false) }
   var loaded by remember(chara.id) { mutableStateOf(false) }
 
   LaunchedEffect(chara.id, chara.partnerId) {
@@ -55,6 +58,9 @@ internal fun LibraryPartnerPanel(
       emoji = st.optString("emoji", "some")
       thinking = st.optString("thinkingDefault", "auto")
       proactive = st.optBoolean("proactive", false)
+      selfie = st.optBoolean("selfie", false)
+      selfiePerDay = st.optInt("selfiePerDay", 2)
+      selfieVideo = st.optBoolean("selfieVideo", false)
       loaded = true
     }
   }
@@ -87,6 +93,28 @@ internal fun LibraryPartnerPanel(
         LibraryChoiceRow("絵文字", listOf("none" to "なし", "some" to "少し", "many" to "多め"), emoji) { emoji = it }
         LibraryChoiceRow("考え方", listOf("instant" to "すぐ答える", "auto" to "おまかせ", "deep" to "じっくり"), thinking) { thinking = it }
         LibraryChoiceRow("自分から話しかける", listOf("false" to "しない", "true" to "する"), proactive.toString()) { proactive = it == "true" }
+        LibraryChoiceRow("📸 自撮りを送ってくる", listOf("false" to "しない", "true" to "する"), selfie.toString()) { selfie = it == "true" }
+        if (selfie) {
+          LibraryChoiceRow("1日の回数", listOf("1" to "1回", "2" to "2回", "4" to "4回", "6" to "6回"), selfiePerDay.toString()) { selfiePerDay = it.toInt() }
+          LibraryChoiceRow("動画も送る", listOf("false" to "写真だけ", "true" to "ときどき動画"), selfieVideo.toString()) { selfieVideo = it == "true" }
+          Text(
+            text = "朝8時〜夜中2時の間に、気持ち・高まり・会話の場面に合わせて、このキャラの見た目で撮った写真を送ってきます。会話の途中（最後のやりとりから20分以内）と、ほかの生成の最中は送りません。動画は1本に数分〜十数分かかり、その間は会話AIが止まります。",
+            style = ClawTheme.type.captionSmall,
+            color = ClawTheme.colors.textSubtle,
+          )
+          ClawSecondaryButton(
+            text = "📸 今すぐ1枚送ってもらう",
+            onClick = {
+              scope.launch {
+                runCatching {
+                  rpc(GatewayMethod.PartnerSelfieSend, JSONObject().put("partnerId", chara.partnerId))
+                  onStatus("📸 ${chara.name}が写真を撮っています。できあがるとチャットに届きます。")
+                }.onFailure { onStatus("自撮りのエラー: ${it.message}") }
+              }
+            },
+            modifier = Modifier.fillMaxWidth(),
+          )
+        }
         ClawSecondaryButton(
           text = "会話の設定を保存",
           enabled = loaded,
@@ -94,6 +122,7 @@ internal fun LibraryPartnerPanel(
             scope.launch {
               runCatching {
                 val settings = JSONObject().put("replyLength", replyLength).put("emoji", emoji).put("thinkingDefault", thinking).put("proactive", proactive)
+                  .put("selfie", selfie).put("selfiePerDay", selfiePerDay).put("selfieVideo", selfieVideo)
                 rpc(GatewayMethod.PartnerSettingsSet, JSONObject().put("partnerId", chara.partnerId).put("settings", settings))
                 onStatus("会話の設定を保存しました")
               }.onFailure { onStatus("保存エラー: ${it.message}") }

@@ -834,6 +834,7 @@ enum class GatewayMethod(
   PartnerAffectTouch("partner.affect.touch"),
   PartnerAffectProfileSet("partner.affect.profile.set"),
   PartnerSceneSet("partner.scene.set"),
+  PartnerSelfieSend("partner.selfie.send"),
   CrieDevGet("crie.dev.get"),
   CrieDevSet("crie.dev.set"),
   CrieDevRequest("crie.dev.request"),

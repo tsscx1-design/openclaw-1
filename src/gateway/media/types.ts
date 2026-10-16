@@ -51,7 +51,11 @@ export type MediaJob = {
    * reply, so the job waits for it before taking the GPU, and its end is announced to that
    * partner's chat (or the phone when no partner is named).
    */
-  chat?: { partnerId?: string };
+  chat?: {
+    partnerId?: string;
+    /** A selfie the partner sends by herself: the chat gets this caption with the result, not the usual notice. */
+    selfie?: { caption: string };
+  };
   /** motion: the working folder (script, voices, key images, cuts) and whether this is a draft */
   motion?: { dir: string; draft?: boolean; preview?: boolean };
   /** About how many seconds the job takes (set when it starts; the app shows what is left). */
