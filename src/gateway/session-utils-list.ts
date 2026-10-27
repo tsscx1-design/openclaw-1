@@ -373,6 +373,7 @@ export function prepareSessionRowSelection(
         prepared?.metadataPrepared === true,
       );
     },
+    modelSearchMayMatch: (search: string) => projection.modelSearchMayMatch(search),
   };
 }
 
