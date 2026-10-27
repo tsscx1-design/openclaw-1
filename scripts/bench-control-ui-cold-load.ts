@@ -17,7 +17,6 @@
 // --gateway-url uses real Gateway HTTP serving with synthetic bootstrap/RPC fixtures.
 // --gateway-http serves paired bundles, including layout cells, through the Gateway HTTP owner.
 // --first-load skips warm-up and clears client state; external Gateway URL runs stay single-sample.
-// --offline-first-page selects nine tall rows, a table and one image, with Details open.
 // --sidebar-persistent-children keeps expanded rows outside root windows for staggered handoff proof.
 // --boot-route chat|new|sessions|settings selects the measured reload destination.
 // --layout-matrix covers routes, themes, viewports and cold/warm reloads; --runs is per bundle/cell.
@@ -109,7 +108,6 @@ import {
 } from "./lib/control-ui-interaction-trace.ts";
 import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
 import { installPaneChromeProbe } from "./lib/control-ui-pane-chrome-probe.ts";
-import { readWarmPageSignature } from "./lib/control-ui-warm-page-signature.ts";
 import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
 import {
   GATEWAY_HEAP_SAMPLE_INTERVAL,
@@ -270,8 +268,6 @@ const { values } = parseArgs({
     "row-facts": { type: "boolean", default: false },
     "pane-chrome-probe": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
-    "offline-first-page": { type: "boolean", default: false },
-    "paint-holding": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string" },
     "latency-profile": { type: "string" },
@@ -584,15 +580,6 @@ if (
   throw new Error("history-validator-delay-ms requires warm-reload and a delay from 0 to 10000");
 }
 const face = values.face;
-if (
-  values["offline-first-page"] &&
-  (!values["warm-reload"] ||
-    values["row-facts"] ||
-    values["large-snapshot"] ||
-    values["transcript-messages"])
-) {
-  throw new Error("offline-first-page requires warm-reload and owns the nine-row transcript shape");
-}
 if (face !== "chat" && face !== "dashboard") {
   throw new Error("Expected face chat or dashboard");
 }
@@ -803,7 +790,6 @@ const fixture = createControlUiTeamScaleFixture({
     : undefined,
   closedMenuMembers: values["closed-menu-members"],
   largeSnapshot: values["large-snapshot"],
-  offlineFirstPage: values["offline-first-page"],
   rowFacts: values["row-facts"],
   offRosterSession: values["off-roster-route"],
   transcriptMessages,
@@ -852,10 +838,7 @@ const isolatedSandboxOrigin =
   values["dashboard-widget"] || values["dashboard-mcp-app"] || values["dashboard-paint-marker"]
     ? `http://127.0.0.1:${address.port}`
     : undefined;
-const chromiumArgs = [
-  "--enable-automation",
-  ...(isolatedSandboxOrigin ? [`--isolate-origins=${isolatedSandboxOrigin}`] : []),
-];
+const chromiumArgs = isolatedSandboxOrigin ? [`--isolate-origins=${isolatedSandboxOrigin}`] : [];
 let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
@@ -906,50 +889,10 @@ try {
     serverVersion: JSON.parse(await readFile("package.json", "utf8")).version,
   });
   browser = await chromium.launch({
-    executablePath: values["paint-holding"]
-      ? chromium.executablePath()
-      : resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
-    ...(values["paint-holding"] ? { channel: "chromium" } : {}),
+    executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
     headless: true,
     args: chromiumArgs,
   });
-  if (values["paint-holding"]) {
-    const defaultSession = await browser.newBrowserCDPSession();
-    const defaults = (await defaultSession.send("Browser.getBrowserCommandLine")).arguments;
-    const disabled = defaults.find((argument) => argument.startsWith("--disable-features="));
-    if (!disabled) throw new Error("Cannot preserve Playwright's default disabled-feature list");
-    await browser.close();
-    browser = await chromium.launch({
-      executablePath: chromium.executablePath(),
-      channel: "chromium",
-      headless: true,
-      ignoreDefaultArgs: [disabled],
-      args: [
-        ...chromiumArgs,
-        "--enable-features=PaintHolding",
-        `--disable-features=${disabled
-          .slice("--disable-features=".length)
-          .split(",")
-          .filter((feature) => feature !== "PaintHolding")
-          .join(",")}`,
-      ],
-    });
-  }
-  const commandSession = await browser.newBrowserCDPSession();
-  const browserCommandLine = (await commandSession.send("Browser.getBrowserCommandLine")).arguments;
-  await writeFile(
-    path.join(artifactDir, "browser-command-line.json"),
-    JSON.stringify(
-      {
-        version: browser.version(),
-        paintHolding: values["paint-holding"],
-        arguments: browserCommandLine,
-      },
-      null,
-      2,
-    ),
-  );
-  await commandSession.detach();
   const context = await browser.newContext({
     viewport,
     isMobile: viewportName === "mobile",
@@ -1387,7 +1330,7 @@ try {
     : "";
   const warmProbes =
     values["warm-reload"] || firstLoad
-      ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"] })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"}, ${values["offline-first-page"] ? readWarmPageSignature.toString() : "undefined"});`
+      ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"] })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
       : "";
   const presentationProbes = fixture.sidebarPresentation
     ? `\n(${installTeamScaleSidebarPresentation.toString()})(${JSON.stringify(fixture.sidebarPresentation)});${values["sidebar-presentation-probe"] ? `\n(${sidebarPresentationProbe.toString()})();` : ""}`
@@ -1531,14 +1474,12 @@ try {
           .getByText("Team metric 1", { exact: true })
           .waitFor();
       }
-      if (fixture.counts.inlineWidgets > 0) {
-        await page
-          .frameLocator(".chat-tool-card__preview-frame")
-          .last()
-          .frameLocator("iframe")
-          .getByText(`Team metric ${fixture.counts.inlineWidgets}`, { exact: true })
-          .waitFor();
-      }
+      await page
+        .frameLocator(".chat-tool-card__preview-frame")
+        .last()
+        .frameLocator("iframe")
+        .getByText("Team metric 12", { exact: true })
+        .waitFor();
       if (face === "dashboard") {
         await page.waitForFunction(() => {
           const ready = Reflect.get(window, "__readWidgetReadiness")();
@@ -1747,19 +1688,6 @@ try {
       await page.locator('[data-navigation-view="online"]').click();
     }
     await settle("chat");
-    if (values["offline-first-page"]) {
-      const details = page
-        .locator(".chat-pane-cache__pane--active .chat-details")
-        .filter({ visible: true });
-      if (!(await details.isVisible())) {
-        await page
-          .locator(".chat-pane-cache__pane--active .chat-details-toggle")
-          .filter({ visible: true })
-          .click();
-      }
-      await details.waitFor();
-      await settle("chat");
-    }
     await expandSidebar();
     if (viewportName === "mobile") {
       await page.keyboard.press("Escape");
@@ -1924,28 +1852,6 @@ try {
       await restoreColdLoadWarmState(page, reloadStorage!, layoutCell && reloadStorage);
       await selectComparisonBundle(bundleIndex, page);
     }
-    if (values["offline-first-page"] || values["paint-holding"]) {
-      await page.goto(runUrl, { waitUntil: "domcontentloaded" });
-      await settle(runRoute);
-      if (values["offline-first-page"]) {
-        const reference = await page.evaluate(readWarmPageSignature);
-        if (
-          reference.missing.length ||
-          reference.skeletons ||
-          !reference.imagesReady ||
-          !reference.dashboardContentsVerified
-        ) {
-          throw new Error(
-            `Settled warm-page reference is incomplete: ${JSON.stringify(reference)}`,
-          );
-        }
-        await page.evaluate(
-          (value) =>
-            sessionStorage.setItem("openclaw.bench.warm-page-reference", JSON.stringify(value)),
-          reference,
-        );
-      }
-    }
     runTransfer =
       sidebarRowTransfer === "delta" || (sidebarRowTransfer === "interleaved" && run % 2 === 1)
         ? "delta"
@@ -1985,18 +1891,6 @@ try {
       await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
     }
     const rawTrace: unknown[] = [];
-    const screencastFrames: Array<{ data: string; timestamp: number | null }> = [];
-    if (values["filmstrip-only"]) {
-      const firstFrame = new Promise<void>((resolve) => {
-        cdp.on("Page.screencastFrame", (frame) => {
-          screencastFrames.push({ data: frame.data, timestamp: frame.metadata.timestamp ?? null });
-          void cdp.send("Page.screencastFrameAck", { sessionId: frame.sessionId });
-          resolve();
-        });
-      });
-      await cdp.send("Page.startScreencast", { format: "png", everyNthFrame: 1 });
-      await firstFrame;
-    }
     const styleSheets = new Map<string, InteractionStyleSheet>();
     if (values["selector-stats"]) {
       cdp.on(
@@ -2106,8 +2000,6 @@ try {
         releaseBootAssets?.();
         await page.waitForLoadState("domcontentloaded");
       }
-    } else if ((values["offline-first-page"] || values["paint-holding"]) && !cold) {
-      await page.reload({ waitUntil: "domcontentloaded" });
     } else if (
       layoutCell ||
       firstLoad ||
@@ -2122,24 +2014,6 @@ try {
       await page.reload({ waitUntil: "domcontentloaded" });
     }
     await settle(runRoute);
-    if (values["filmstrip-only"]) {
-      await cdp.send("Page.stopScreencast");
-      const origin = await page.evaluate(() => performance.timeOrigin);
-      const directory = path.join(artifactDir, `run-${run + 1}.screencast`);
-      await mkdir(directory);
-      for (const [index, frame] of screencastFrames.entries()) {
-        await writeFile(path.join(directory, `${index}.png`), Buffer.from(frame.data, "base64"));
-      }
-      await writeFile(
-        path.join(directory, "frames.json"),
-        JSON.stringify(
-          screencastFrames.map(({ timestamp }, index) => ({
-            index,
-            atMs: timestamp === null ? null : timestamp * 1000 - origin,
-          })),
-        ),
-      );
-    }
     const coverage = values.coverage
       ? (await page.coverage.stopJSCoverage())
           .filter((entry) => URL.parse(entry.url)?.pathname.startsWith("/assets/"))
@@ -3414,8 +3288,6 @@ try {
         cpuThrottle,
         comparisonBundleDirs,
         fixture: fixture.counts,
-        offlineFirstPage: values["offline-first-page"],
-        paintHolding: values["paint-holding"],
         sidebarView,
         sidebarAvatars: values["sidebar-avatars"],
         sidebarPresentation: values["sidebar-presentation"],
