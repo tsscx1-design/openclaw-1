@@ -167,6 +167,7 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
               },
             }),
             snapshot,
+            snapshotEntry: snapshot,
             read: (authority) => enqueue(() => snapshot(authority)),
             command: (phase, input, authority, observer) =>
               enqueue(() => {
