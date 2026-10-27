@@ -30,7 +30,7 @@ class GeometryPane extends ChatPaneRuntime {
   fixtureStream: string | null = null;
   private messages: unknown[] = [];
   private rowHeight = 120;
-  private widgetLayout?: ChatWidgetLayout;
+  private fixtureWidgetLayout?: ChatWidgetLayout;
 
   initialize(
     context: ApplicationContext,
@@ -44,7 +44,7 @@ class GeometryPane extends ChatPaneRuntime {
     this.paneId = "geometry-render";
     this.sessionKey = "agent:main:geometry-render";
     this.rowHeight = rowHeight;
-    this.widgetLayout = widgetLayout;
+    this.fixtureWidgetLayout = widgetLayout;
     this.messages = Array.from({ length: 100 }, (_, index) => ({
       role: index % 2 === 0 ? "user" : "assistant",
       content: `Row ${index}`,
@@ -72,7 +72,7 @@ class GeometryPane extends ChatPaneRuntime {
           thread: threadProps(this.paneId, this.sessionKey, this.messages, {
             stream: this.fixtureStream,
             assistantName: "Assistant",
-            widgetLayout: this.widgetLayout,
+            widgetLayout: this.fixtureWidgetLayout,
           }),
           rowHeight: this.rowHeight,
         },
